@@ -1,0 +1,26 @@
+{
+  "categories": {
+    "Media/Photos": [".jpg", ".jpeg", ".png", ".heic", ".webp"],
+    "Media/RAW": [".cr2", ".nef", ".arw", ".dng"],
+    "Media/Videos": [".mp4", ".mov", ".avi", ".mkv"],
+    "Documents/PDF": [".pdf"],
+    "Documents/Word": [".doc", ".docx", ".pages"],
+    "Documents/Spreadsheets": [".xls", ".xlsx", ".csv", ".numbers"],
+    "Documents/Presentations": [".ppt", ".pptx", ".key"],
+    "Documents/Text": [".txt", ".rtf", ".md"],
+    "Creative/Projects": [".psd", ".ai", ".xd", ".fig", ".sketch"],
+    "Creative/Audio": [".mp3", ".wav", ".aac", ".flac"],
+    "Archives": [".zip", ".tar", ".gz", ".tgz", ".rar", ".7z"],
+    "E-Books": [".epub", ".mobi"],
+    "Code/Snippets": [".py", ".js", ".html", ".css", ".cpp", ".sh"]
+  },
+  "project_markers": [
+    ".git",
+    "package.json",
+    "requirements.txt",
+    "Cargo.toml",
+    "go.mod",
+    "pom.xml",
+    "build.gradle"
+  ]
+}

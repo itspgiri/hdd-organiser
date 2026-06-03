@@ -1,0 +1,39 @@
+import os
+import re
+from typing import Optional
+import json
+
+class Categorizer:
+    def __init__(self, config_path: str):
+        with open(config_path, 'r') as f:
+            self.config = json.load(f)
+            
+        self.categories = self.config.get("categories", {})
+        self.project_markers = set(self.config.get("project_markers", []))
+        
+        # Invert categories for faster lookup {".jpg": "Media"}
+        self.ext_to_category = {}
+        for cat, exts in self.categories.items():
+            # If it's a Media category (like Media/Photos), we want it all to go to "Media"
+            # as requested by the user.
+            target_cat = "Media" if cat.startswith("Media/") else cat
+            
+            for ext in exts:
+                self.ext_to_category[ext.lower()] = target_cat
+                
+        # Precompile common date matching regex for filenames like IMG_20230615.jpg
+        self.date_regex = re.compile(r"(?:19|20)\d{2}[-_\.]?(?:0[1-9]|1[0-2])[-_\.]?(?:0[1-9]|[12][0-9]|3[01])")
+
+    def is_project_root(self, folder_path: str) -> bool:
+        """Checks if a folder contains any project markers."""
+        try:
+            items = set(os.listdir(folder_path))
+            return any(marker in items for marker in self.project_markers)
+        except PermissionError:
+            return False
+
+    def get_file_category(self, filename: str) -> str:
+        """Returns the primary category for a given file based on its extension."""
+        _, ext = os.path.splitext(filename)
+        # Default to "Unsorted" if unknown
+        return self.ext_to_category.get(ext.lower(), "Unsorted")
