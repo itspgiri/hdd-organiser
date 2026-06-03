@@ -1,6 +1,7 @@
 import os
 import shutil
 import argparse
+import subprocess
 from typing import Dict, Tuple
 
 from rich.prompt import Prompt, Confirm
@@ -23,11 +24,19 @@ def main():
     source = args.source
     if not source:
         print_info("Welcome! Let's organize your drive.")
-        source = Prompt.ask("[bold cyan]Enter the path to your messy SOURCE folder (e.g., /Volumes/MyHDD)[/]")
-    
+        print_info("Opening folder selection dialog...")
+        source = _macos_choose_folder("Select your messy SOURCE folder to organize:")
+        if not source:
+            print_error("Operation cancelled.")
+            return
+            
     dest = args.dest
     if not dest:
-        dest = Prompt.ask("[bold cyan]Enter the path to your new DESTINATION folder[/]")
+        print_info("Opening folder selection dialog for destination...")
+        dest = _macos_choose_folder("Select your DESTINATION folder (where organized files will go):")
+        if not dest:
+            print_error("Operation cancelled.")
+            return
 
     if not os.path.exists(source):
         print_error(f"Source path does not exist: {source}")
@@ -167,6 +176,21 @@ def main():
         print_info("Don't worry, progress is saved. Run again to resume where it left off.")
     finally:
         engine.close()
+
+def _macos_choose_folder(prompt_text: str) -> str:
+    """Uses AppleScript to open a native macOS folder selection dialog."""
+    script = f'''
+    try
+        tell application (path to frontmost application as text)
+            set theFolder to choose folder with prompt "{prompt_text}"
+            POSIX path of theFolder
+        end tell
+    on error number -128
+        return ""
+    end try
+    '''
+    result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+    return result.stdout.strip()
 
 if __name__ == "__main__":
     main()
