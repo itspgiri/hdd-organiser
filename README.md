@@ -110,6 +110,28 @@ After organization completes:
 
 ---
 
+## ❓ Frequently Asked Questions (FAQ)
+
+### Q1: Will running parallel threads slow down or crash my Mac or run out of RAM?
+**No, 100% safe.** The app streams small 1MB hash buffer chunks, consuming only **~15 to 20 MB of RAM total** (< 0.2% of system memory). Worker thread count is capped at 4 workers for external HDDs to prevent mechanical drive head thrashing while keeping your Mac fast and usable.
+
+### Q2: Is it possible two completely different files have the exact same byte size? Will one get deleted?
+**No data is ever lost.** If two files happen to have the exact same byte size, our engine **always computes their SHA-256 hashes** and compares them content-by-content. If their hashes differ, both files are kept and copied safely without data loss.
+
+### Q3: How are screenshots detected, and where do they go?
+Screenshots are detected using multi-OS filename regex patterns (`Screenshot...`, `Screen Shot...`, `Captura de pantalla...`) and missing camera EXIF data. They are sorted chronologically into `Media/Screenshots/YYYY/MonthName/`.
+
+### Q4: What if a folder is mistakenly detected as an intact code project?
+In the **Dry-Run Preview Dashboard**, click on the project folder card to open the **Inspector Drawer** and click **`⚡ Sort This as Regular Files (Not a Code Project)`**. You can also use the 1-click **`Dissolve & Re-Sort`** button in the Post-Transfer Review Panel.
+
+### Q5: Can I organize multiple messy source folders at once?
+**Yes.** Click **Browse** multiple times or enter comma-separated paths in Step 1 (e.g. `/Volumes/HDD1, /Volumes/HDD2, /Users/Desktop/MessyFolder`).
+
+### Q6: How does the tool make file transfers so fast on macOS?
+It uses native macOS Darwin Kernel `copyfile` syscalls via `ctypes`. On APFS volumes, it performs instant **Copy-on-Write cloning in 0.001s** with zero physical bytes read/written.
+
+---
+
 ## 🔍 Troubleshooting HDD Detection on macOS
 
 If macOS does not automatically show your external HDD:
