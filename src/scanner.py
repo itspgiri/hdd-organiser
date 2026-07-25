@@ -56,20 +56,24 @@ class Scanner:
             return "Windows System Junk (Thumbs.db)"
         return "Other System Garbage"
 
-    def extract_gdrive_zip(self, zip_path: str, progress_cb=None, is_preview: bool = False) -> List[str]:
-        """High-speed native C extraction with instant memory-only preview inspection."""
+    def extract_gdrive_zip(self, zip_path: str, progress_cb=None, is_preview: bool = False, total_zips: int = 0) -> List[str]:
+        """High-speed non-blocking extraction with completeness verification (.unzip_completed marker) and live progress."""
         import zipfile
         import subprocess
+        import shutil
 
         if zip_path in self.processed_zips:
             return []
         self.processed_zips.add(zip_path)
 
         extracted_files = []
+        zip_filename = os.path.basename(zip_path)
+
         try:
             zip_dir = os.path.dirname(zip_path)
-            zip_name = os.path.splitext(os.path.basename(zip_path))[0]
+            zip_name = os.path.splitext(zip_filename)[0]
             staging_dir = os.path.join(zip_dir, f".unzipped_{zip_name}")
+            completed_marker = os.path.join(staging_dir, ".unzip_completed")
 
             # 1. INSTANT PREVIEW MODE (Memory-Only Inspection in ~0.05s)
             if is_preview:
@@ -83,28 +87,47 @@ class Scanner:
                         virtual_path = os.path.join(staging_dir, member.filename)
                         extracted_files.append(virtual_path)
                 self.gdrive_zips_extracted += 1
-                if os.path.basename(zip_path) not in self.gdrive_zip_names:
-                    self.gdrive_zip_names.append(os.path.basename(zip_path))
+                if zip_filename not in self.gdrive_zip_names:
+                    self.gdrive_zip_names.append(zip_filename)
                 return extracted_files
 
-            # 2. FULL TRANSFER MODE (High-Speed Native C Extraction via /usr/bin/unzip)
+            # 2. FULL TRANSFER MODE: CHECK IF ALREADY EXTRACTED & VERIFY COMPLETENESS
             if os.path.exists(staging_dir):
-                for root, dirs, files in os.walk(staging_dir):
-                    for f in files:
-                        base_f = os.path.basename(f)
-                        if not self.is_garbage(base_f):
-                            extracted_files.append(os.path.join(root, f))
-                if extracted_files:
-                    return extracted_files
+                if os.path.exists(completed_marker):
+                    # Verified complete! Re-use extracted files without unzipping again.
+                    if progress_cb:
+                        zip_count_str = f"[{self.gdrive_zips_extracted + 1}/{total_zips}]" if total_zips > 0 else ""
+                        progress_cb(0, 0, f"⏩ Skipping {zip_count_str} (Already verified unzipped): {zip_filename}")
+                    for root, dirs, files in os.walk(staging_dir):
+                        for f in files:
+                            base_f = os.path.basename(f)
+                            if base_f != ".unzip_completed" and not self.is_garbage(base_f):
+                                extracted_files.append(os.path.join(root, f))
+                    if extracted_files:
+                        self.gdrive_zips_extracted += 1
+                        if zip_filename not in self.gdrive_zip_names:
+                            self.gdrive_zip_names.append(zip_filename)
+                        return extracted_files
+                else:
+                    # Incomplete previous unzip attempt! Wipe and re-extract cleanly.
+                    shutil.rmtree(staging_dir, ignore_errors=True)
 
             os.makedirs(staging_dir, exist_ok=True)
-            if progress_cb:
-                progress_cb(0, 0, f"⚡ High-Speed Native Unzipping: {os.path.basename(zip_path)}...")
+            self.gdrive_zips_extracted += 1
+            zip_count_str = f"[{self.gdrive_zips_extracted}/{total_zips}]" if total_zips > 0 else f"[{self.gdrive_zips_extracted}]"
 
-            # Use native macOS unzip binary for 10x - 20x hardware extraction speed
+            if progress_cb:
+                progress_cb(0, 0, f"📦 Unzipping {zip_count_str}: {zip_filename}...")
+
+            # Use native macOS unzip with stdin=DEVNULL to ensure NON-BLOCKING non-interactive hardware speed
             extracted_via_native = False
             try:
-                ret = subprocess.run(["unzip", "-q", "-o", zip_path, "-d", staging_dir], capture_output=True, timeout=120)
+                ret = subprocess.run(
+                    ["unzip", "-q", "-o", zip_path, "-d", staging_dir],
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    timeout=45
+                )
                 if ret.returncode == 0:
                     extracted_via_native = True
             except Exception:
@@ -124,14 +147,21 @@ class Scanner:
                 for root, dirs, files in os.walk(staging_dir):
                     for f in files:
                         base_f = os.path.basename(f)
-                        if not self.is_garbage(base_f):
+                        if base_f != ".unzip_completed" and not self.is_garbage(base_f):
                             extracted_files.append(os.path.join(root, f))
 
-            self.gdrive_zips_extracted += 1
-            if os.path.basename(zip_path) not in self.gdrive_zip_names:
-                self.gdrive_zip_names.append(os.path.basename(zip_path))
+            # Mark extraction as 100% complete!
+            try:
+                with open(completed_marker, 'w') as f:
+                    f.write("COMPLETED")
+            except Exception:
+                pass
+
+            if zip_filename not in self.gdrive_zip_names:
+                self.gdrive_zip_names.append(zip_filename)
         except Exception:
             extracted_files.append(zip_path)
+
         return extracted_files
 
     def scan_directory(self, source_path, excluded_projects: Set[str] = None, progress_cb = None, cancel_check = None, auto_unzip_gdrive: bool = True, is_preview: bool = False):
@@ -141,6 +171,20 @@ class Scanner:
             sources = source_path
         else:
             sources = [p.strip() for p in source_path.split(',') if p.strip()]
+
+        # Pre-pass: Count total Google Drive zips for progress tracking
+        gdrive_zips_to_extract = []
+        if auto_unzip_gdrive:
+            for src in sources:
+                if not os.path.exists(src):
+                    continue
+                for root, dirs, files in os.walk(src):
+                    dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
+                    for f in files:
+                        if self.is_gdrive_zip(f, root_path=root):
+                            gdrive_zips_to_extract.append(os.path.join(root, f))
+        
+        total_zips = len(gdrive_zips_to_extract)
 
         scan_count = 0
         for src in sources:
@@ -172,9 +216,9 @@ class Scanner:
                             self.garbage_samples.append(full_path)
                         continue
 
-                    # 4. Auto-extract Google Drive / Takeout / Download Zip Archives (with instant preview & loop protection)
+                    # 4. Auto-extract Google Drive / Takeout / Download Zip Archives (with non-blocking execution & completeness verification)
                     if auto_unzip_gdrive and self.is_gdrive_zip(file, root_path=root):
-                        unzipped_items = self.extract_gdrive_zip(full_path, progress_cb=progress_cb, is_preview=is_preview)
+                        unzipped_items = self.extract_gdrive_zip(full_path, progress_cb=progress_cb, is_preview=is_preview, total_zips=total_zips)
                         for u_item in unzipped_items:
                             u_base = os.path.basename(u_item)
                             if not self.is_garbage(u_base):
@@ -187,6 +231,7 @@ class Scanner:
 
                     if progress_cb and (scan_count % 100 == 0):
                         progress_cb(0, 0, f"🔍 Scanning: {len(self.files_to_process)} files found... ({os.path.basename(root)})")
+
 
 
 
