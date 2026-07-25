@@ -1,143 +1,141 @@
-# Drive Organizer
+# Drive Organizer 🚀
 
-Drive Organizer is a command-line utility written in Python to reorganize files from large storage drives (500GB+) into a structured destination directory. The tool focuses on safety, project detection, and deduplication to prevent data loss.
+**Drive Organizer** is a high-performance macOS utility designed to safely reorganize massive storage drives (500GB to 2TB+) into a clean, structured directory layout. Built with strict read-only source policies, content deduplication, and project protection.
 
 ---
 
-## Technical Features
+## 🌟 Key Features
 
-| Feature | Functionality | Safety Mechanism |
+| Feature | Functionality | Safety & Performance Mechanism |
 | :--- | :--- | :--- |
-| **Project Protection** | Detects development repositories (Git, Node.js, Python, etc.) | Moves the entire project folder intact to preserve compilation paths. |
-| **Media Sorting** | Indexes photos and videos chronologically. | Utilizes a 6-layer date extraction fallback pipeline. |
-| **Deduplication** | Identifies duplicate files. | Compares file checksums (MD5/SHA-256) to save storage space. |
-| **Conflict Resolution** | Manages file name collisions. | Appends numerical suffixes to prevent file overwrites. |
-| **Same-Volume Speed** | Bypasses physical file copying when reorganizing on the same disk. | Creates Hard Links or APFS Clones (instantaneous, consumes 0 bytes of extra storage). |
-| **macOS Native Support** | Integrates macOS-specific APIs for a seamless user experience. | Utilizes APFS Cloning, Finder Color Tags for review, and system notification alerts. |
-| **UX & Safety Checks** | Protects against common user errors and OS cache files. | Blocks circular path infinite loops, filters OS hidden files (.DS_Store), and runs pre-flight write checks. |
-| **Resumable Batches** | Safely pauses and resumes transfers mid-way. | Commits a checkpoint registry (`.organizer_checkpoint.json`) every 50 files or 5GB to audit and skip verified copies on retry. |
-| **Interactive Preview** | Runs a safe dry-run scan by default. | Displays execution maps and prompts for approval before disk writes. |
+| **Smart Content Deduplication** | Identifies exact duplicate files across your drive regardless of filename. | Calculates head/tail SHA-256 part-hashes stored in an ACID SQLite index (`.organizer_checkpoint.db`), skipping duplicate copies and saving GBs/TBs of storage. |
+| **Media Chronological Sorting** | Sorts photos, videos, and RAW camera files into `Media/YYYY/MonthName/`. | 6-layer priority fallback pipeline (EXIF DateTimeOriginal ➔ EXIF Digitized ➔ Filename Regex ➔ Live Photo HEIC Glue ➔ macOS Creation Birthtime ➔ Modification Time). |
+| **Apple Live Photo Pairing** | Pairs `.heic` photos and `.mov` video clips together. | Pre-indexes HEIC dates so paired Live Photo MOV clips land in the exact same Year/Month folder. |
+| **Intact Code Protection** | Detects development repositories (Git, Node.js, Python, Rust, Go). | Moves the entire code project directory intact into `Code/project_name/` to preserve dependencies, git history, and imports. |
+| **Post-Organization Review & Dissolve** | Interactive 1-click folder dissolve tool. | Dissolves any mistakenly identified code project and automatically categorizes its inner files into Media/Documents. |
+| **Source Duplicate Cleaner** | Safely cleans duplicate files from your source drive. | Moves skipped duplicate source files directly to macOS Trash (`~/.Trash`) with 1 click. |
+| **Same-Volume Speed** | Instant zero-space copies when reorganizing on the same disk. | Utilizes macOS APFS `clonefile` wrappers via `shutil.copy2`. |
+| **System Protection** | Keeps destination drives 100% clean of junk files. | Filters OS hidden files (`.DS_Store`, `._*` AppleDouble, `Thumbs.db`, `.Spotlight-V100`, `.fseventsd`). Suppresses Spotlight indexing (`.metadata_never_index`) and blocks system sleep (`caffeinate`). |
 
 ---
 
-## Safety Guarantees
+## 📁 Destination Layout Structure
 
-*   **Out-of-Place Organization**: The tool always writes the organized files into a **new destination folder**. It never modifies your source files in-place.
-*   **Read-Only Source Policy**: The source directory is treated as read-only. No files on the source drive are altered, moved, or deleted, ensuring your original backup remains completely intact.
-*   **System Sleep Prevention**: Automatically blocks macOS system sleep using `caffeinate` wrappers, ensuring your MacBook doesn't fall asleep and terminate the HDD transfer mid-way.
-*   **Spotlight Indexing Suppression**: Automatically creates a `.metadata_never_index` file in your organized folder, preventing macOS Spotlight indexers from thrashing your HDD heads during copy operations.
-
----
-
-## Directory Structures
-
-### Codebase Layout
 ```text
-hard-drive-organizer/
-├── README.md               # Quick start guide (this file)
-├── concept_design.md       # Technical design and architecture
-├── requirements.txt        # Package dependencies
-├── config.json             # File category mappings
-├── organizer.py            # Main entry point
-└── src/
-    ├── __init__.py
-    ├── scanner.py          # Filesystem walker
-    ├── categorizer.py      # Rule engine
-    ├── file_ops.py         # Disk operations
-    └── utils.py            # Loggers and helpers
-```
-
-### Destination Drive Layout
-```text
-destination_drive/
-├── Media/
-│   └── YYYY/
-│       └── MonthName/
-│           ├── photo.heic
-│           ├── video.mp4
-│           └── raw_photo.dng
-├── Documents/
-│   ├── PDFs/
-│   ├── Docs/            # txt, docx, pages
-│   └── Spreadsheets/    # csv, xlsx, numbers
-├── Code/
-│   └── react-app/       # Copied as an intact directory
-└── Unsorted/            # Uncategorized or metadata-less files
-```
-
----
-
-## System Workflows
-
-### Execution Flowchart
-```mermaid
-graph TD
-    classDef startEnd fill:#4f46e5,stroke:#312e81,stroke-width:2px,color:#fff;
-    classDef decision fill:#1e293b,stroke:#818cf8,stroke-width:2px,color:#f1f5f9;
-    classDef action fill:#065f46,stroke:#047857,stroke-width:1px,color:#fff;
-    classDef fallback fill:#7f1d1d,stroke:#b91c1c,stroke-width:1px,color:#fff;
-
-    Start(["Scan Source Directory"]):::startEnd --> CheckProject{"Is Code Project Folder?"}:::decision
-    
-    CheckProject -- Yes --> MoveProject["Copy entire folder to Code/"]:::action
-    CheckProject -- No --> DetectType{"Determine File Category"}:::decision
-    
-    %% Media Branch
-    DetectType -- Media --> DateFallback{"6-Layer Date Extraction"}:::decision
-    DateFallback -- Success --> MoveMedia["Copy to Media/YYYY/MonthName/"]:::action
-    DateFallback -- Failure --> MoveUnsorted["Copy to Unsorted/"]:::fallback
-    
-    %% Documents Branch
-    DetectType -- Document --> DocSubtype{"Identify Document Subtype"}:::decision
-    DocSubtype -- PDF --> MovePDF["Copy to Documents/PDFs/"]:::action
-    DocSubtype -- Text --> MoveDoc["Copy to Documents/Docs/"]:::action
-    DocSubtype -- Spreadsheet --> MoveSheet["Copy to Documents/Spreadsheets/"]:::action
-    
-    %% Unknown Branch
-    DetectType -- Other/Unknown --> MoveUnsorted
-    
-    %% Loop/End
-    MoveProject --> End(["Process Next File/Folder"]):::startEnd
-    MoveMedia --> End
-    MoveUnsorted --> End
-    MovePDF --> End
-    MoveDoc --> End
-    MoveSheet --> End
+Destination_Drive/
+│
+├── 📸 Media/                     <-- Photos, Videos & Camera RAWs (by Date)
+│   ├── 2021/
+│   │   └── August/
+│   │       ├── vacation_01.jpg
+│   │       ├── vacation_01.mov   <-- Live Photo video paired automatically
+│   │       └── beach.heic
+│   └── 2023/
+│       └── December/
+│           ├── holiday.png
+│           └── camera_raw.cr2
+│
+├── 📄 Documents/                 <-- Workplace & Personal Documents
+│   ├── PDF/                      <-- .pdf files
+│   ├── Word/                     <-- .docx, .doc, .pages
+│   ├── Spreadsheets/             <-- .csv, .xlsx, .numbers
+│   ├── Presentations/            <-- .pptx, .ppt, .key
+│   └── Text/                     <-- .txt, .rtf, .md
+│
+├── 💻 Code/                      <-- Development Repositories & Snippets
+│   ├── my-react-app/             <-- Preserved 100% INTACT
+│   ├── python-automation/        <-- Preserved 100% INTACT
+│   └── Snippets/                 <-- Loose single script files (.py, .js)
+│
+├── 🎨 Creative/                  <-- Design Files & Audio
+│   ├── Projects/                 <-- .psd, .ai, .fig, .sketch
+│   └── Audio/                    <-- .mp3, .wav, .flac
+│
+├── 📦 Archives/                  <-- .zip, .rar, .tar.gz, .7z
+│
+└── ❓ Unsorted/                  <-- Unknown formats or missing dates
+                                      (Tagged with Yellow macOS Finder Tag "To Review")
 ```
 
 ---
 
-## Date Extraction Reference
+## 🚀 Quick Start & How to Run
 
-The tool checks the following metadata sources in order of priority to determine a media file's chronological location:
+### Option 1: Web Interface (GUI Mode)
 
-| Priority | Source | Description | Example |
-| :---: | :--- | :--- | :--- |
-| **1** | EXIF DateTimeOriginal | Embedded camera sensor acquisition time. | `2023:06:15 14:32:01` |
-| **2** | EXIF DateTimeDigitized | Embedded digitization timestamp. | `2023:06:15 14:35:00` |
-| **3** | Filename Parsing | Regex patterns matching date sub-strings. | `IMG_20230615_120000.jpg` |
-| **4** | macOS Birth Time | File creation timestamp on filesystem. | June 15, 2023 |
-| **5** | Modification Time | Last modified timestamp on filesystem. | June 16, 2023 |
-| **6** | Fallback Directory | Placed in `Unsorted/` folder. | `Unsorted/image.jpg` |
+Double-click **`Launch App.command`** or run in terminal:
+```bash
+python3 main.py
+```
+This launches the native macOS desktop app.
+
+#### 4-Step GUI Workflow:
+1. **Select Source Folder**: Choose the drive or messy directory to sort.
+2. **Choose Destination Strategy**:
+   - **✨ Option A: Brand New Folder** (Organize into a fresh folder).
+   - **📂 Option B: Merge into Already Sorted Folder** (Append without duplicates).
+3. **Select Destination Folder** & Toggle **`[✓] Run in Dry-Run / Preview Mode first`**.
+4. **Preview Confirmation & Transfer**: Review file counts, total size, and free space. Click **`🚀 YES, Execute Full Transfer!`**.
 
 ---
 
-## Quick Start
+### Option 2: Command Line Interface (CLI Mode)
 
-### 1. Configure the Environment
-Ensure your terminal path points to this workspace, and install the library dependencies:
+Double-click **`Launch CLI.command`** or run in terminal:
+
+#### 1. Dry Run / Preview Mode (100% Safe, No Files Moved)
 ```bash
-pip3 install -r requirements.txt
+python3 main.py --cli /Volumes/SourceDrive /Volumes/DestinationDrive --preview
 ```
 
-### 2. Run Preview
-Perform a preview dry-run scan to verify size mappings, duplicate counts, and file placement maps without altering any files:
+#### 2. Full Copy Execution
 ```bash
-python3 organizer.py /path/to/source /path/to/destination --preview
+python3 main.py --cli /Volumes/SourceDrive /Volumes/DestinationDrive --copy
 ```
 
-### 3. Run Organization
-To write the organized file structure to the destination directory, run:
-```bash
-python3 organizer.py /path/to/source /path/to/destination --copy
-```
+---
+
+## 🔍 Troubleshooting HDD Detection on macOS
+
+If macOS does not automatically show your external HDD:
+
+1. **Check `/Volumes` in Terminal**:
+   ```bash
+   ls -la /Volumes/
+   ```
+2. **Check Unmounted Physical Disks**:
+   ```bash
+   diskutil list
+   ```
+   Mount manually if unmounted:
+   ```bash
+   diskutil mount /dev/disk2s1
+   ```
+   Or force read-only mount if filesystem is dirty:
+   ```bash
+   diskutil mount readOnly /dev/disk2s1
+   ```
+3. **Run macOS Disk Utility First Aid**:
+   - Open **Disk Utility** (`Cmd + Space` ➔ search `Disk Utility`).
+   - Click **View** ➔ **Show All Devices**.
+   - Select your physical external drive and click **First Aid**.
+4. **Grant Full Disk Access**:
+   - Go to **System Settings ➔ Privacy & Security ➔ Full Disk Access**.
+   - Ensure **Terminal** and **Python** have Full Disk Access toggled ON.
+
+---
+
+## 🛠️ Post-Organization Review Tools
+
+After organization completes, open **Post-Organization Review & Tools**:
+- **🔍 Review Code Projects & Dissolve**: View all project folders under `Code/`. Click **`Dissolve & Re-Sort`** to break open any folder that was mistakenly detected as a code project and categorize its inner files.
+- **🗑️ Clean Source Duplicates**: View all skipped duplicate source files and click **`Move Duplicates to Trash`** to reclaim space on your original HDD.
+
+---
+
+## 🛡️ Safety Guarantees
+
+* **Read-Only Source**: Your source HDD is never modified or written to during organization.
+* **ACID SQLite Checkpointing**: Commits progress to `.organizer_checkpoint.db` so transfers can safely resume if interrupted.
+* **System Sleep Prevention**: Uses `caffeinate` to prevent Mac sleep mid-transfer.
+* **Spotlight Indexing Suppression**: Writes `.metadata_never_index` to prevent Spotlight indexer thrashing.
