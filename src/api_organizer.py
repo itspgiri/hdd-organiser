@@ -49,6 +49,7 @@ class OrganizerAPI:
         
         total_bytes = 0
         category_counts: Dict[str, int] = {}
+        category_samples: Dict[str, List[str]] = {}
         for fp in scanner.files_to_process:
             try:
                 total_bytes += os.path.getsize(fp)
@@ -56,6 +57,10 @@ class OrganizerAPI:
                 pass
             cat = categorizer.get_file_category(os.path.basename(fp))
             category_counts[cat] = category_counts.get(cat, 0) + 1
+            if cat not in category_samples:
+                category_samples[cat] = []
+            if len(category_samples[cat]) < 25:
+                category_samples[cat].append(fp)
 
         from .utils import format_size
         size_str = format_size(total_bytes)
@@ -84,8 +89,10 @@ class OrganizerAPI:
             "garbage_breakdown": scanner.garbage_breakdown,
             "garbage_samples": scanner.garbage_samples,
             "free_space": free_space_str,
-            "categories": category_counts
+            "categories": category_counts,
+            "category_samples": category_samples
         }
+
 
         
         if len(scanner.files_to_process) == 0 and len(scanner.projects_found) == 0:

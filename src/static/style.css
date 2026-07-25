@@ -474,6 +474,23 @@ input[type="text"]:focus {
     margin-top: 8px;
 }
 
+.category-pill-btn {
+    background: var(--bg-color);
+    border: 1px solid var(--primary-color);
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    color: var(--text-color);
+}
+
+.category-pill-btn:hover {
+    background: rgba(10, 132, 255, 0.15);
+    transform: translateY(-1px);
+}
+
 .category-pill {
     background: var(--bg-color);
     border: 1px solid var(--border-color);
@@ -482,6 +499,7 @@ input[type="text"]:focus {
     font-size: 11px;
     font-weight: 500;
 }
+
 
 .btn.success-btn {
     background-color: #34c759;

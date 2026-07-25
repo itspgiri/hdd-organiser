@@ -191,8 +191,19 @@
                 <div id="garbage-samples-list" class="inspect-files-list" style="max-height: 120px;"></div>
             </div>
 
+            <!-- INSPECT CATEGORY FILES MODAL -->
+            <div id="category-modal" class="inspect-modal hidden" style="margin-top: 15px;">
+                <div class="inspect-header">
+                    <strong id="category-modal-title">Category File Preview</strong>
+                    <button class="btn secondary" style="font-size: 11px; padding: 2px 8px; float: right;" onclick="closeCategoryModal()">✕ Close</button>
+                </div>
+                <div id="category-modal-subtitle" style="font-size: 11px; opacity: 0.85; margin-top: 4px; margin-bottom: 8px;"></div>
+                <div id="category-files-list" class="inspect-files-list" style="max-height: 180px;"></div>
+            </div>
+
 
             <!-- POST-TRANSFER REVIEW TOOLS -->
+
             <div id="review-panel" class="review-panel hidden" style="margin-top: 20px;">
                 <h3>🛠️ Post-Organization Review & Tools</h3>
                 <p class="small-hint" style="margin-left: 0; margin-bottom: 12px;">Refine your organized folders or clean up duplicate files on your source drive.</p>

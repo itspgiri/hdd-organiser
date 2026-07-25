@@ -192,26 +192,47 @@ function renderPreviewDashboard(summary) {
     let catsHtml = "";
     if (summary.categories) {
         for (const [cat, count] of Object.entries(summary.categories)) {
-            catsHtml += `<span class="category-pill">${cat}: <strong>${count}</strong></span>`;
+            catsHtml += `<button class="category-pill-btn" onclick="inspectCategoryFiles('${cat}')">📂 <strong>${cat}</strong>: ${count} <span style="opacity:0.7; font-size:9px;">(Click to preview)</span></button>`;
         }
     }
 
     let projsHtml = "";
     if (summary.project_details && summary.project_details.length > 0) {
-        projsHtml = `<div style="font-size: 11px; margin-top: 10px;"><strong>Intact Code Projects (${summary.total_projects}) - Click to inspect/re-sort:</strong><br>`;
+        projsHtml = `
+        <div style="margin-top: 12px; border-top: 1px solid var(--border-color); padding-top: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 4px;">
+                <strong style="font-size: 12px;">💻 Intact Code Repositories (${summary.total_projects}):</strong>
+                <div style="display: flex; gap: 4px;">
+                    <button class="btn secondary" style="font-size: 10px; padding: 2px 6px;" onclick="selectAllProjects(true)">☑ Select All</button>
+                    <button class="btn secondary" style="font-size: 10px; padding: 2px 6px;" onclick="selectAllProjects(false)">☐ Deselect All</button>
+                </div>
+            </div>
+            <input type="text" id="project-search-filter" placeholder="🔍 Search code projects..." onkeyup="filterProjectsList()" style="font-size: 11px; padding: 4px 8px; margin-bottom: 6px; width: 100%; border-radius: 4px;">
+            <div id="projects-checkbox-container" style="max-height: 130px; overflow-y: auto; background: var(--secondary-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color);">`;
+
         summary.project_details.forEach(p => {
             const isExcluded = excludedProjects.includes(p.path);
-            const excClass = isExcluded ? 'excluded' : '';
-            const excTxt = isExcluded ? ' (Excluded ⚡)' : '';
-            projsHtml += `<button class="project-card-btn ${excClass}" onclick="inspectProject('${p.path.replace(/\\/g, '\\\\')}', '${p.name}')">📂 ${p.name}${excTxt}</button>`;
+            const checkedAttr = isExcluded ? '' : 'checked';
+            const textStyle = isExcluded ? 'text-decoration: line-through; opacity: 0.6;' : '';
+            const statusLabel = isExcluded 
+                ? '<span style="color: #e74c3c; font-size: 10px;">⚡ (Sort as Regular Files)</span>' 
+                : '<span style="color: #2ecc71; font-size: 10px;">✓ (Keep Intact under Code/)</span>';
+            projsHtml += `
+            <div class="project-row-item" style="margin-bottom: 4px; font-size: 11px;">
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                    <input type="checkbox" ${checkedAttr} onchange="onProjectCheckboxChange('${p.path.replace(/\\/g, '\\\\')}', this.checked)">
+                    <span style="${textStyle}">📂 <strong>${p.name}</strong> ${statusLabel}</span>
+                    <button class="btn secondary" style="font-size: 9px; padding: 1px 4px; margin-left: auto;" onclick="inspectProject('${p.path.replace(/\\/g, '\\\\')}', '${p.name}')">🔍 Inspect</button>
+                </label>
+            </div>`;
         });
-        projsHtml += `</div>`;
+        projsHtml += `</div></div>`;
     }
 
     let garbageHtml = "";
     if (summary.ignored_garbage && summary.ignored_garbage > 0) {
         garbageHtml = `
-        <div style="font-size: 11px; margin-top: 10px; padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="font-size: 11px; margin-top: 10px; padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--border-color);">
             <span>🛡️ Safely Ignored <strong>${summary.ignored_garbage.toLocaleString()}</strong> System/Garbage Files</span>
             <button class="btn secondary" style="font-size: 10px; padding: 2px 8px;" onclick="inspectGarbageFiles()">
                 🔍 View Breakdown Report
@@ -234,16 +255,72 @@ function renderPreviewDashboard(summary) {
                 <div class="stat-lbl">Free HDD Space</div>
             </div>
         </div>
+        <div style="font-size: 11px; font-weight: bold; margin-top: 8px; margin-bottom: 4px;">📊 File Categories (Click any category to preview files):</div>
         <div class="category-pills">
             ${catsHtml}
         </div>
         ${projsHtml}
         ${garbageHtml}
-        <div style="font-size: 11px; opacity: 0.7; margin-top: 8px; color: var(--success-color);">
+        <div style="font-size: 11px; opacity: 0.7; margin-top: 10px; color: var(--success-color);">
             ✓ <strong>Safe Read-Only Preview:</strong> 0 files moved. Ready to organize.
         </div>
     `;
 }
+
+function inspectCategoryFiles(category) {
+    const modal = document.getElementById('category-modal');
+    const title = document.getElementById('category-modal-title');
+    const sub = document.getElementById('category-modal-subtitle');
+    const list = document.getElementById('category-files-list');
+
+    if (!lastPreviewSummary) return;
+
+    title.innerText = `📂 ${category} Category File Preview`;
+    const totalCount = (lastPreviewSummary.categories && lastPreviewSummary.categories[category]) || 0;
+    sub.innerText = `Sample files that will be organized into ${category} (Total: ${totalCount}):`;
+
+    const samples = (lastPreviewSummary.category_samples && lastPreviewSummary.category_samples[category]) || [];
+    if (samples.length === 0) {
+        list.innerHTML = "<div style='opacity:0.7;'>No sample paths available for this category.</div>";
+    } else {
+        list.innerHTML = samples.map(f => `<div>📄 ${f}</div>`).join('');
+    }
+
+    modal.classList.remove('hidden');
+}
+
+function closeCategoryModal() {
+    document.getElementById('category-modal').classList.add('hidden');
+}
+
+function onProjectCheckboxChange(path, isChecked) {
+    const idx = excludedProjects.indexOf(path);
+    if (isChecked && idx >= 0) {
+        excludedProjects.splice(idx, 1); // Keep intact
+    } else if (!isChecked && idx < 0) {
+        excludedProjects.push(path); // Exclude -> sort as regular files
+    }
+    if (lastPreviewSummary) renderPreviewDashboard(lastPreviewSummary);
+}
+
+function selectAllProjects(keepIntact) {
+    if (!lastPreviewSummary || !lastPreviewSummary.project_details) return;
+    if (keepIntact) {
+        excludedProjects = [];
+    } else {
+        excludedProjects = lastPreviewSummary.project_details.map(p => p.path);
+    }
+    renderPreviewDashboard(lastPreviewSummary);
+}
+
+function filterProjectsList() {
+    const q = (document.getElementById('project-search-filter') ? document.getElementById('project-search-filter').value : "").toLowerCase();
+    document.querySelectorAll('.project-row-item').forEach(row => {
+        const txt = row.innerText.toLowerCase();
+        row.style.display = txt.includes(q) ? "block" : "none";
+    });
+}
+
 
 function inspectGarbageFiles() {
     const modal = document.getElementById('garbage-modal');
