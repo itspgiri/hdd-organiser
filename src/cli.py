@@ -121,15 +121,14 @@ def run_cli():
     engine.start_caffeinate()
     
     # Pre-pass: Index HEIC dates for Live Photos (pairs HEIC + MOV)
-    live_photo_dates: Dict[str, Tuple[str, str]] = {}
+    live_photo_dates: Dict[Tuple[str, str], Tuple[str, str]] = {}
     for fp in scanner.files_to_process:
-        fn = os.path.basename(fp)
-        if fn.lower().endswith('.heic'):
+        if fp.rsplit('.', 1)[-1].lower() == 'heic':
             y, m = dates.extract_date(fp)
             if y and m:
-                name_only, _ = os.path.splitext(fn)
-                lookup_key = os.path.join(os.path.dirname(fp), name_only)
-                live_photo_dates[lookup_key] = (y, m)
+                dir_name, fn = os.path.split(fp)
+                name_only = fn.rsplit('.', 1)[0]
+                live_photo_dates[(dir_name, name_only)] = (y, m)
 
     try:
         with get_progress_bar() as progress:
@@ -156,16 +155,22 @@ def run_cli():
                 
                 # Determine relative destination
                 if category == "Media":
+                    is_ss = categorizer.is_screenshot(filename)
                     year, month = dates.extract_date(file_path)
                     
-                    name_only, ext = os.path.splitext(filename)
-                    lookup_key = os.path.join(os.path.dirname(file_path), name_only)
-                    
                     if not (year and month):
+                        dir_name = os.path.dirname(file_path)
+                        name_only = filename.rsplit('.', 1)[0]
+                        lookup_key = (dir_name, name_only)
                         if lookup_key in live_photo_dates:
                             year, month = live_photo_dates[lookup_key]
                             
-                    if year and month:
+                    if is_ss:
+                        if year and month:
+                            rel_dest = os.path.join("Media", "Screenshots", year, month, filename)
+                        else:
+                            rel_dest = os.path.join("Media", "Screenshots", "Unsorted", filename)
+                    elif year and month:
                         rel_dest = os.path.join("Media", year, month, filename)
                     else:
                         rel_dest = os.path.join("Unsorted", filename)
