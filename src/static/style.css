@@ -39,8 +39,99 @@ body {
 }
 
 .app-container {
-    padding: 30px 40px;
+    padding: 20px 40px;
     max-width: 100%;
+}
+
+/* Navigation bar and breadcrumbs */
+.nav-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.nav-breadcrumbs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.crumb {
+    opacity: 0.5;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.crumb.active {
+    opacity: 1;
+    font-weight: 700;
+    color: var(--primary-color);
+}
+
+.crumb-separator {
+    opacity: 0.3;
+}
+
+.nav-back-btn {
+    font-size: 12px;
+    padding: 6px 12px;
+}
+
+/* Inspect Modal */
+.inspect-modal {
+    background: var(--bg-color);
+    border: 1px solid var(--primary-color);
+    border-radius: 10px;
+    padding: 14px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.inspect-modal.hidden {
+    display: none;
+}
+
+.inspect-header {
+    font-size: 14px;
+    margin-bottom: 10px;
+}
+
+.inspect-files-list {
+    background: var(--secondary-bg);
+    border-radius: 6px;
+    padding: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.project-card-btn {
+    display: inline-block;
+    background: var(--secondary-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 3px 8px;
+    margin: 2px 4px 2px 0;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.project-card-btn:hover {
+    border-color: var(--primary-color);
+    background: rgba(10, 132, 255, 0.1);
+}
+
+.project-card-btn.excluded {
+    text-decoration: line-through;
+    opacity: 0.5;
+    background: rgba(255, 59, 48, 0.1);
+    border-color: var(--error-color);
 }
 
 h1 {

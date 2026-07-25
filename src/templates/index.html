@@ -8,6 +8,20 @@
 </head>
 <body>
     <main class="app-container">
+        <!-- TOP NAVIGATION HEADER -->
+        <nav class="nav-bar">
+            <button class="btn secondary nav-back-btn" id="nav-back-btn" onclick="navigateBack()" style="display: none;">
+                ◄ Back
+            </button>
+            <div class="nav-breadcrumbs" id="nav-breadcrumbs">
+                <span class="crumb active" id="crumb-guide" onclick="showView('guide-view')">Welcome</span>
+                <span class="crumb-separator">›</span>
+                <span class="crumb" id="crumb-setup" onclick="showView('setup-view')">Setup</span>
+                <span class="crumb-separator">›</span>
+                <span class="crumb" id="crumb-progress">Preview & Run</span>
+            </div>
+        </nav>
+
         <!-- GUIDE VIEW -->
         <div id="guide-view" class="view active">
             <div class="header-icon">🚀</div>
@@ -108,8 +122,22 @@
                 <div class="confirm-title">📊 Dry-Run Scan Results Summary</div>
                 <div id="preview-dashboard" class="preview-dashboard" style="margin-top: 10px;"></div>
                 <div class="actions" style="margin-top: 15px;">
-                    <button class="btn secondary" onclick="resetToSetup()" style="width: 30%;">Setup</button>
+                    <button class="btn secondary" onclick="showView('setup-view')" style="width: 30%;">◄ Back to Setup</button>
                     <button class="btn success-btn" id="confirm-go-btn" onclick="executeFullCopy()" style="width: 65%; float: right;">🚀 YES, Execute Full Transfer!</button>
+                </div>
+            </div>
+
+            <!-- INSPECT CODE PROJECT MODAL -->
+            <div id="inspect-modal" class="inspect-modal hidden" style="margin-top: 15px;">
+                <div class="inspect-header">
+                    <strong id="inspect-folder-title">Folder Inspection</strong>
+                    <button class="btn secondary" style="font-size: 11px; padding: 2px 8px; float: right;" onclick="closeInspectModal()">✕ Close</button>
+                </div>
+                <div id="inspect-files-list" class="inspect-files-list"></div>
+                <div class="inspect-actions" style="margin-top: 10px;">
+                    <button class="btn primary" id="toggle-exclude-btn" onclick="toggleExcludeCurrentProject()" style="width: 100%; font-size: 12px;">
+                        ⚡ Sort This as Regular Files (Not a Code Project)
+                    </button>
                 </div>
             </div>
 
@@ -127,7 +155,7 @@
             </div>
 
             <div class="actions" id="default-actions" style="margin-top: 20px;">
-                <button class="btn secondary full-width" id="done-btn" onclick="resetToSetup()" disabled>Return to Setup</button>
+                <button class="btn secondary full-width" id="done-btn" onclick="showView('setup-view')" disabled>Return to Setup</button>
             </div>
         </div>
     </main>

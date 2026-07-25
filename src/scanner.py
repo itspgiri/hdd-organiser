@@ -24,8 +24,9 @@ class Scanner:
             return True
         return False
 
-    def scan_directory(self, source_path: str):
+    def scan_directory(self, source_path: str, excluded_projects: Set[str] = None):
         """Recursively scan directory, finding files and project folders."""
+        excluded = excluded_projects or set()
         for root, dirs, files in os.walk(source_path):
             
             # 1. Skip system folders completely
@@ -33,8 +34,8 @@ class Scanner:
                 dirs.clear() # Stop walking this branch
                 continue
 
-            # 2. Check if this is a Code Project (subdirectories only, not source root itself)
-            if root != source_path and self.categorizer.is_project_root(root):
+            # 2. Check if this is a Code Project (subdirectories only, not source root itself, and not excluded)
+            if root != source_path and root not in excluded and self.categorizer.is_project_root(root):
                 self.projects_found.append(root)
                 dirs.clear() # Do not traverse INSIDE the project!
                 continue

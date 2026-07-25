@@ -13,7 +13,7 @@ class OrganizerAPI:
         self.log_cb = log_cb
         self.progress_cb = progress_cb
         
-    def run(self, source_abs: str, dest_abs: str, is_preview: bool = False, dest_mode: str = "new"):
+    def run(self, source_abs: str, dest_abs: str, is_preview: bool = False, dest_mode: str = "new", excluded_projects: list = None):
         mode_str = "Preview (Dry Run)" if is_preview else "Full Transfer"
         folder_type = "Brand New Folder" if dest_mode == "new" else "Merge with Existing Folder"
         self.log_cb(f"Mode: {mode_str} | Destination Strategy: {folder_type}")
@@ -28,7 +28,8 @@ class OrganizerAPI:
         scanner = Scanner(categorizer)
         
         self.log_cb(f"Scanning {source_abs} for files... (This may take a minute)")
-        scanner.scan_directory(source_abs)
+        excluded_set = set(excluded_projects or [])
+        scanner.scan_directory(source_abs, excluded_projects=excluded_set)
         
         total_bytes = 0
         category_counts: Dict[str, int] = {}
@@ -56,11 +57,13 @@ class OrganizerAPI:
         except Exception:
             pass
 
+        project_details = [{"name": os.path.basename(p), "path": p} for p in scanner.projects_found]
         self.last_preview_summary = {
             "total_files": len(scanner.files_to_process),
             "total_size": size_str,
             "total_projects": len(scanner.projects_found),
-            "projects": [os.path.basename(p) for p in scanner.projects_found[:10]], # top 10
+            "projects": [os.path.basename(p) for p in scanner.projects_found[:10]],
+            "project_details": project_details,
             "ignored_garbage": scanner.ignored_garbage_count,
             "free_space": free_space_str,
             "categories": category_counts

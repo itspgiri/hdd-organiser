@@ -75,6 +75,7 @@ def start():
     dest = data.get("dest")
     is_preview = data.get("is_preview", False)
     dest_mode = data.get("dest_mode", "new")
+    excluded_projects = data.get("excluded_projects", [])
     
     if not source or not dest:
         return jsonify({"success": False, "error": "Source and destination required"})
@@ -83,11 +84,27 @@ def start():
     state.status = "running"
     state.message = "Initializing..."
     
-    thread = threading.Thread(target=run_organizer, args=(source, dest, is_preview, dest_mode))
+    thread = threading.Thread(target=run_organizer, args=(source, dest, is_preview, dest_mode, excluded_projects))
     thread.daemon = True
     thread.start()
     
     return jsonify({"success": True})
+
+@app.route("/api/inspect_folder", methods=["GET"])
+def inspect_folder():
+    folder_path = request.args.get("path")
+    if not folder_path or not os.path.exists(folder_path):
+        return jsonify({"files": []})
+    sample_files = []
+    try:
+        for root, dirs, files in os.walk(folder_path):
+            for f in files[:20]:
+                sample_files.append(os.path.join(root, f).replace(folder_path, '').lstrip('/\\'))
+            if len(sample_files) >= 15:
+                break
+    except Exception:
+        pass
+    return jsonify({"folder_path": folder_path, "name": os.path.basename(folder_path), "files": sample_files})
 
 @app.route("/api/status", methods=["GET"])
 def get_status():
@@ -177,10 +194,10 @@ def list_volumes():
 
     return jsonify({"volumes": volumes, "diskutil_summary": unmounted[:10]})
 
-def run_organizer(source, dest, is_preview=False, dest_mode="new"):
+def run_organizer(source, dest, is_preview=False, dest_mode="new", excluded_projects=None):
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
-    success = api.run(source, dest, is_preview=is_preview, dest_mode=dest_mode)
+    success = api.run(source, dest, is_preview=is_preview, dest_mode=dest_mode, excluded_projects=excluded_projects)
     if hasattr(api, 'last_preview_summary'):
         state.preview_summary = api.last_preview_summary
     if success:

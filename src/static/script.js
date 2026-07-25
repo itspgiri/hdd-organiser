@@ -1,4 +1,7 @@
 let currentDestMode = 'new';
+let excludedProjects = [];
+let currentInspectedPath = "";
+let viewHistory = ['guide-view'];
 
 function selectDestMode(mode) {
     currentDestMode = mode;
@@ -7,6 +10,40 @@ function selectDestMode(mode) {
     
     const radio = document.querySelector(`input[name="dest-mode"][value="${mode}"]`);
     if (radio) radio.checked = true;
+}
+
+function showView(viewId) {
+    if (viewHistory[viewHistory.length - 1] !== viewId) {
+        viewHistory.push(viewId);
+    }
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.getElementById(viewId).classList.add('active');
+
+    // Update back button & breadcrumbs
+    const backBtn = document.getElementById('nav-back-btn');
+    backBtn.style.display = viewHistory.length > 1 ? 'inline-block' : 'none';
+
+    document.querySelectorAll('.crumb').forEach(c => c.classList.remove('active'));
+    if (viewId === 'guide-view') document.getElementById('crumb-guide').classList.add('active');
+    if (viewId === 'setup-view') document.getElementById('crumb-setup').classList.add('active');
+    if (viewId === 'progress-view') document.getElementById('crumb-progress').classList.add('active');
+}
+
+function navigateBack() {
+    if (viewHistory.length > 1) {
+        viewHistory.pop();
+        const prevView = viewHistory[viewHistory.length - 1];
+        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+        document.getElementById(prevView).classList.add('active');
+
+        const backBtn = document.getElementById('nav-back-btn');
+        backBtn.style.display = viewHistory.length > 1 ? 'inline-block' : 'none';
+
+        document.querySelectorAll('.crumb').forEach(c => c.classList.remove('active'));
+        if (prevView === 'guide-view') document.getElementById('crumb-guide').classList.add('active');
+        if (prevView === 'setup-view') document.getElementById('crumb-setup').classList.add('active');
+        if (prevView === 'progress-view') document.getElementById('crumb-progress').classList.add('active');
+    }
 }
 
 async function selectFolder(type) {
@@ -52,7 +89,8 @@ async function startOrganizing() {
                 source: source, 
                 dest: dest,
                 is_preview: isPreview,
-                dest_mode: currentDestMode
+                dest_mode: currentDestMode,
+                excluded_projects: excludedProjects
             })
         });
         const data = await response.json();
@@ -73,94 +111,6 @@ async function startOrganizing() {
     }
 }
 
-function showView(viewId) {
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById(viewId).classList.add('active');
-}
-
-function startPolling() {
-    if (pollInterval) clearInterval(pollInterval);
-    document.getElementById('done-btn').disabled = true;
-    document.getElementById('status-heading').innerText = "Organizing Files...";
-    document.getElementById('status-heading').style.color = "var(--text-color)";
-    
-    pollInterval = setInterval(async () => {
-        try {
-            const response = await fetch('/api/status');
-            const data = await response.json();
-            
-            updateProgressUI(data);
-            
-            if (data.status === 'complete' || data.status === 'error') {
-                clearInterval(pollInterval);
-                finishOrganizing(data.status, data);
-            }
-        } catch (e) {
-            console.error("Polling error", e);
-        }
-    }, 500);
-}
-
-function updateProgressUI(data) {
-    const fill = document.getElementById('progress-fill');
-    const percentTxt = document.getElementById('progress-percentage');
-    const countTxt = document.getElementById('progress-count');
-    const msgTxt = document.getElementById('current-message');
-    const logContent = document.getElementById('log-content');
-    
-    const percent = data.total > 0 ? Math.min(100, Math.round((data.progress / data.total) * 100)) : 0;
-    
-    fill.style.width = `${percent}%`;
-    percentTxt.innerText = `${percent}%`;
-    countTxt.innerText = `${data.progress} / ${data.total}`;
-    msgTxt.innerText = data.message || "";
-    
-    // Update logs
-    logContent.innerHTML = data.logs.map(log => `<div>${log}</div>`).join('');
-    
-    // Auto scroll logs
-    const logContainer = document.getElementById('log-container');
-    logContainer.scrollTop = logContainer.scrollHeight;
-}
-
-let lastPreviewSummary = {};
-
-function finishOrganizing(status, data) {
-    const heading = document.getElementById('status-heading');
-    const btn = document.getElementById('done-btn');
-    const confirmBox = document.getElementById('confirm-box');
-    const defaultActions = document.getElementById('default-actions');
-    const reviewPanel = document.getElementById('review-panel');
-    
-    if (status === 'complete') {
-        if (lastWasPreview) {
-            heading.innerText = "Dry-Run Scan Complete!";
-            heading.style.color = "var(--primary-color)";
-            if (data && data.preview_summary) {
-                renderPreviewDashboard(data.preview_summary);
-            }
-            confirmBox.classList.remove('hidden');
-            reviewPanel.classList.add('hidden');
-            defaultActions.style.display = "none";
-        } else {
-            heading.innerText = "All Files Organized Successfully! 🚀";
-            heading.style.color = "var(--success-color)";
-            confirmBox.classList.add('hidden');
-            reviewPanel.classList.remove('hidden');
-            defaultActions.style.display = "block";
-        }
-    } else {
-        heading.innerText = "Error Occurred";
-        heading.style.color = "var(--error-color)";
-        confirmBox.classList.add('hidden');
-        reviewPanel.classList.add('hidden');
-        defaultActions.style.display = "block";
-    }
-    
-    btn.disabled = false;
-    document.getElementById('progress-fill').style.width = "100%";
-}
-
 function renderPreviewDashboard(summary) {
     const dash = document.getElementById('preview-dashboard');
     if (!summary || !summary.total_files) {
@@ -176,8 +126,15 @@ function renderPreviewDashboard(summary) {
     }
 
     let projsHtml = "";
-    if (summary.projects && summary.projects.length > 0) {
-        projsHtml = `<div style="font-size: 11px; margin-top: 8px;"><strong>Intact Code Projects Detected (${summary.total_projects}):</strong> ${summary.projects.join(', ')}</div>`;
+    if (summary.project_details && summary.project_details.length > 0) {
+        projsHtml = `<div style="font-size: 11px; margin-top: 10px;"><strong>Intact Code Projects (${summary.total_projects}) - Click to inspect/re-sort:</strong><br>`;
+        summary.project_details.forEach(p => {
+            const isExcluded = excludedProjects.includes(p.path);
+            const excClass = isExcluded ? 'excluded' : '';
+            const excTxt = isExcluded ? ' (Excluded ⚡)' : '';
+            projsHtml += `<button class="project-card-btn ${excClass}" onclick="inspectProject('${p.path.replace(/\\/g, '\\\\')}', '${p.name}')">📂 ${p.name}${excTxt}</button>`;
+        });
+        projsHtml += `</div>`;
     }
 
     dash.innerHTML = `
@@ -203,6 +160,55 @@ function renderPreviewDashboard(summary) {
             ✓ <strong>Safe Read-Only Preview:</strong> 0 files moved. Ready to organize.
         </div>
     `;
+}
+
+async function inspectProject(path, name) {
+    currentInspectedPath = path;
+    const modal = document.getElementById('inspect-modal');
+    const title = document.getElementById('inspect-folder-title');
+    const list = document.getElementById('inspect-files-list');
+    const toggleBtn = document.getElementById('toggle-exclude-btn');
+
+    title.innerText = `Inspect Folder: ${name}`;
+    list.innerHTML = "<div>Loading files...</div>";
+    modal.classList.remove('hidden');
+
+    const isExcluded = excludedProjects.includes(path);
+    toggleBtn.innerText = isExcluded 
+        ? "✓ Re-Enable Code Project Protection" 
+        : "⚡ Sort This as Regular Files (Not a Code Project)";
+
+    try {
+        const response = await fetch(`/api/inspect_folder?path=${encodeURIComponent(path)}`);
+        const data = await response.json();
+        
+        if (!data.files || data.files.length === 0) {
+            list.innerHTML = "<div style='opacity: 0.7;'>No sample files found.</div>";
+            return;
+        }
+
+        list.innerHTML = data.files.map(f => `<div>📄 ${f}</div>`).join('');
+    } catch (e) {
+        list.innerHTML = "<div>Error loading folder files</div>";
+    }
+}
+
+function closeInspectModal() {
+    document.getElementById('inspect-modal').classList.add('hidden');
+}
+
+function toggleExcludeCurrentProject() {
+    if (!currentInspectedPath) return;
+    const idx = excludedProjects.indexOf(currentInspectedPath);
+    if (idx >= 0) {
+        excludedProjects.splice(idx, 1);
+    } else {
+        excludedProjects.push(currentInspectedPath);
+    }
+    closeInspectModal();
+    if (lastPreviewSummary) {
+        renderPreviewDashboard(lastPreviewSummary);
+    }
 }
 
 async function executeFullCopy() {
