@@ -43,7 +43,7 @@ class Scanner:
             return "Windows System Junk (Thumbs.db)"
         return "Other System Garbage"
 
-    def scan_directory(self, source_path, excluded_projects: Set[str] = None, progress_cb = None):
+    def scan_directory(self, source_path, excluded_projects: Set[str] = None, progress_cb = None, cancel_check = None):
         """Recursively scan directory or multiple directories, finding files and project folders."""
         excluded = excluded_projects or set()
         if isinstance(source_path, list):
@@ -56,8 +56,12 @@ class Scanner:
             if not os.path.exists(src):
                 continue
             for root, dirs, files in os.walk(src):
+                if cancel_check and cancel_check():
+                    return
+
                 # 1. Prune skipped system / heavy build directories in-place BEFORE entering them
                 dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS]
+
 
                 # 2. Check if this is a Code Project
                 items_set = set(dirs) | set(files)

@@ -17,13 +17,18 @@ function startPolling() {
 
             updateProgressUI(data);
 
-            if (data.status === 'complete' || data.status === 'error') {
+            if (data.status === 'complete' || data.status === 'error' || data.status === 'cancelled') {
                 clearInterval(pollInterval);
                 pollInterval = null;
 
                 const heading = document.getElementById('status-heading');
                 const doneBtn = document.getElementById('done-btn');
                 const startBtn = document.getElementById('start-btn');
+                const cancelBtn = document.getElementById('cancel-btn');
+                if (cancelBtn) {
+                    cancelBtn.disabled = false;
+                    cancelBtn.innerText = "⛔ Cancel Operation";
+                }
                 if (startBtn) {
                     startBtn.disabled = false;
                     startBtn.innerText = "Start Organizing";
@@ -41,10 +46,11 @@ function startPolling() {
                         document.getElementById('review-panel').classList.remove('hidden');
                     }
                     try { loadHistoryView(false); } catch (e) {}
-                } else if (data.status === 'error') {
-                    if (heading) heading.innerText = "Error Occurred";
+                } else {
+                    if (heading) heading.innerText = "Operation Cancelled / Error";
                 }
             }
+
         } catch (e) {
             console.error("Error polling status", e);
         }
@@ -635,5 +641,31 @@ async function clearHistoryLog() {
         alert("Error clearing history");
     }
 }
+
+async function cancelCurrentOperation() {
+    if (!confirm("Are you sure you want to cancel the organization process midway? Progress completed so far is saved safely in the checkpoint database.")) {
+        return;
+    }
+    const cancelBtn = document.getElementById('cancel-btn');
+    if (cancelBtn) {
+        cancelBtn.disabled = true;
+        cancelBtn.innerText = "Cancelling...";
+    }
+    try {
+        await fetch('/api/cancel', { method: 'POST' });
+        const heading = document.getElementById('status-heading');
+        if (heading) heading.innerText = "Operation Cancelled";
+        const doneBtn = document.getElementById('done-btn');
+        if (doneBtn) doneBtn.disabled = false;
+        const startBtn = document.getElementById('start-btn');
+        if (startBtn) {
+            startBtn.disabled = false;
+            startBtn.innerText = "Start Organizing";
+        }
+    } catch (e) {
+        alert("Error cancelling operation: " + e);
+    }
+}
+
 
 

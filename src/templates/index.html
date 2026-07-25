@@ -130,7 +130,13 @@
 
         <!-- PROGRESS VIEW -->
         <div id="progress-view" class="view hidden">
-            <h2 id="status-heading">Organizing Files...</h2>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h2 id="status-heading" style="margin: 0;">Organizing Files...</h2>
+                <button class="btn danger-btn" id="cancel-btn" onclick="cancelCurrentOperation()" style="font-size: 11px; padding: 4px 12px; background: #e74c3c; color: white; border: none; border-radius: 6px; cursor: pointer;">
+                    ⛔ Cancel Operation
+                </button>
+            </div>
+
             <div class="progress-container">
                 <div class="progress-bar-bg">
                     <div class="progress-bar-fill" id="progress-fill"></div>

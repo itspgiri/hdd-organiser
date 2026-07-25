@@ -266,17 +266,32 @@ def clear_history():
 
 
 
-def run_organizer(source, dest, is_preview=False, dest_mode="new", excluded_projects=None):
+active_api_instance = None
 
+@app.route("/api/cancel", methods=["POST"])
+def cancel_operation():
+    global active_api_instance
+    if active_api_instance:
+        active_api_instance.cancel()
+    state.status = "error"
+    state.message = "Operation cancelled by user. Progress saved."
+    log_cb("⛔ Operation cancelled by user.")
+    return jsonify({"success": True})
+
+def run_organizer(source, dest, is_preview=False, dest_mode="new", excluded_projects=None):
+    global active_api_instance
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
+    active_api_instance = api
     success = api.run(source, dest, is_preview=is_preview, dest_mode=dest_mode, excluded_projects=excluded_projects)
     if hasattr(api, 'last_preview_summary'):
         state.preview_summary = api.last_preview_summary
     if success:
         state.status = "complete"
     else:
-        state.status = "error"
+        state.status = "error" if not api.cancelled else "cancelled"
+    active_api_instance = None
+
 
 def start_ui():
     port = 5050

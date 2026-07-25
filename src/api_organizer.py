@@ -17,8 +17,13 @@ class OrganizerAPI:
         self.config_path = config_path
         self.log_cb = log_cb
         self.progress_cb = progress_cb
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
         
     def run(self, source_abs: str, dest_abs: str, is_preview: bool = False, dest_mode: str = "new", excluded_projects: list = None):
+        self.cancelled = False
         mode_str = "Preview (Dry Run)" if is_preview else "Full Transfer"
         folder_type = "Brand New Folder" if dest_mode == "new" else "Merge with Existing Folder"
         self.log_cb(f"Mode: {mode_str} | Destination Strategy: {folder_type}")
@@ -34,7 +39,12 @@ class OrganizerAPI:
         
         self.log_cb(f"Scanning {source_abs} for files...")
         excluded_set = set(excluded_projects or [])
-        scanner.scan_directory(source_abs, excluded_projects=excluded_set, progress_cb=self.progress_cb)
+        scanner.scan_directory(source_abs, excluded_projects=excluded_set, progress_cb=self.progress_cb, cancel_check=lambda: self.cancelled)
+        
+        if self.cancelled:
+            self.log_cb("Operation cancelled by user. Progress saved.")
+            return False
+
 
         
         total_bytes = 0
@@ -134,6 +144,9 @@ class OrganizerAPI:
             # Code Projects
             total_projects = len(scanner.projects_found)
             for i, proj in enumerate(scanner.projects_found):
+                if self.cancelled:
+                    self.log_cb("Operation cancelled by user. Progress saved.")
+                    return False
                 proj_name = os.path.basename(proj)
                 dest_proj = os.path.join(dest_abs, "Code", proj_name)
                 self.progress_cb(i, total_projects, f"Copying project: {proj_name}")
@@ -148,7 +161,10 @@ class OrganizerAPI:
             start_time = time.time()
 
             def process_single_file(file_path):
+                if self.cancelled:
+                    return
                 filename = os.path.basename(file_path)
+
                 
                 if engine.is_already_copied(file_path):
                     with counter_lock:
