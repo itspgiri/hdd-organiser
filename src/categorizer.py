@@ -28,13 +28,16 @@ class Categorizer:
             re.IGNORECASE
         )
 
-    def is_project_root(self, folder_path: str) -> bool:
+    def is_project_root(self, folder_path: str, items_set: Optional[set] = None) -> bool:
         """Checks if a folder contains any project markers."""
         try:
+            if items_set is not None:
+                return not self.project_markers.isdisjoint(items_set)
             items = os.listdir(folder_path)
             return not self.project_markers.isdisjoint(items)
         except (PermissionError, OSError):
             return False
+
 
     def is_screenshot(self, filename: str) -> bool:
         """Returns True if filename matches screenshot naming conventions across OSs."""

@@ -47,10 +47,12 @@ class Scanner:
                 dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS]
 
                 # 2. Check if this is a Code Project
-                if root != src and root not in excluded and self.categorizer.is_project_root(root):
+                items_set = set(dirs) | set(files)
+                if root != src and root not in excluded and self.categorizer.is_project_root(root, items_set):
                     self.projects_found.append(root)
                     dirs.clear() # Do not traverse INSIDE the project!
                     continue
+
 
                 # 3. Otherwise, process individual files
                 for file in files:
