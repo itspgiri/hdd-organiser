@@ -56,11 +56,15 @@ class Scanner:
             return "Windows System Junk (Thumbs.db)"
         return "Other System Garbage"
 
-    def extract_gdrive_zip(self, zip_path: str, progress_cb=None, is_preview: bool = False, total_zips: int = 0) -> List[str]:
-        """High-speed non-blocking extraction with completeness verification (.unzip_completed marker) and live progress."""
+    def extract_gdrive_zip(self, zip_path: str, progress_cb=None, is_preview: bool = False, total_zips: int = 0, cancel_check=None) -> List[str]:
+        """High-speed non-blocking extraction with completeness verification (.unzip_completed marker) and instant cancellation."""
         import zipfile
         import subprocess
         import shutil
+        import time
+
+        if cancel_check and cancel_check():
+            return []
 
         if zip_path in self.processed_zips:
             return []
@@ -79,6 +83,8 @@ class Scanner:
             if is_preview:
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     for member in zip_ref.infolist():
+                        if cancel_check and cancel_check():
+                            return []
                         if member.is_dir():
                             continue
                         base_f = os.path.basename(member.filename)
@@ -99,6 +105,8 @@ class Scanner:
                         zip_count_str = f"[{self.gdrive_zips_extracted + 1}/{total_zips}]" if total_zips > 0 else ""
                         progress_cb(0, 0, f"⏩ Skipping {zip_count_str} (Already verified unzipped): {zip_filename}")
                     for root, dirs, files in os.walk(staging_dir):
+                        if cancel_check and cancel_check():
+                            return []
                         for f in files:
                             base_f = os.path.basename(f)
                             if base_f != ".unzip_completed" and not self.is_garbage(base_f):
@@ -112,6 +120,9 @@ class Scanner:
                     # Incomplete previous unzip attempt! Wipe and re-extract cleanly.
                     shutil.rmtree(staging_dir, ignore_errors=True)
 
+            if cancel_check and cancel_check():
+                return []
+
             os.makedirs(staging_dir, exist_ok=True)
             self.gdrive_zips_extracted += 1
             zip_count_str = f"[{self.gdrive_zips_extracted}/{total_zips}]" if total_zips > 0 else f"[{self.gdrive_zips_extracted}]"
@@ -119,16 +130,29 @@ class Scanner:
             if progress_cb:
                 progress_cb(0, 0, f"📦 Unzipping {zip_count_str}: {zip_filename}...")
 
-            # Use native macOS unzip with stdin=DEVNULL to ensure NON-BLOCKING non-interactive hardware speed
+            # Use native macOS unzip with process monitoring for instant mid-unzip cancellation
             extracted_via_native = False
             try:
-                ret = subprocess.run(
+                proc = subprocess.Popen(
                     ["unzip", "-q", "-o", zip_path, "-d", staging_dir],
                     stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    timeout=45
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
                 )
-                if ret.returncode == 0:
+                start_time = time.time()
+                while proc.poll() is None:
+                    if cancel_check and cancel_check():
+                        proc.kill()
+                        proc.wait()
+                        shutil.rmtree(staging_dir, ignore_errors=True)
+                        return []
+                    if time.time() - start_time > 60: # 60s timeout safety
+                        proc.kill()
+                        proc.wait()
+                        break
+                    time.sleep(0.1)
+
+                if proc.returncode == 0 and not (cancel_check and cancel_check()):
                     extracted_via_native = True
             except Exception:
                 extracted_via_native = False
@@ -136,12 +160,19 @@ class Scanner:
             if not extracted_via_native:
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     for member in zip_ref.infolist():
+                        if cancel_check and cancel_check():
+                            shutil.rmtree(staging_dir, ignore_errors=True)
+                            return []
                         if member.is_dir():
                             continue
                         base_f = os.path.basename(member.filename)
                         if member.filename.startswith("__MACOSX/") or base_f.startswith("._") or base_f in GARBAGE_FILES:
                             continue
                         extracted_files.append(zip_ref.extract(member, staging_dir))
+
+            if cancel_check and cancel_check():
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                return []
 
             if extracted_via_native:
                 for root, dirs, files in os.walk(staging_dir):
@@ -160,9 +191,11 @@ class Scanner:
             if zip_filename not in self.gdrive_zip_names:
                 self.gdrive_zip_names.append(zip_filename)
         except Exception:
-            extracted_files.append(zip_path)
+            if not (cancel_check and cancel_check()):
+                extracted_files.append(zip_path)
 
         return extracted_files
+
 
     def scan_directory(self, source_path, excluded_projects: Set[str] = None, progress_cb = None, cancel_check = None, auto_unzip_gdrive: bool = True, is_preview: bool = False):
         """Recursively scan directory or multiple directories, finding files and project folders."""
@@ -216,10 +249,13 @@ class Scanner:
                             self.garbage_samples.append(full_path)
                         continue
 
-                    # 4. Auto-extract Google Drive / Takeout / Download Zip Archives (with non-blocking execution & completeness verification)
+                    # 4. Auto-extract Google Drive / Takeout / Download Zip Archives (with non-blocking execution & instant cancellation)
                     if auto_unzip_gdrive and self.is_gdrive_zip(file, root_path=root):
-                        unzipped_items = self.extract_gdrive_zip(full_path, progress_cb=progress_cb, is_preview=is_preview, total_zips=total_zips)
+                        unzipped_items = self.extract_gdrive_zip(full_path, progress_cb=progress_cb, is_preview=is_preview, total_zips=total_zips, cancel_check=cancel_check)
+                        if cancel_check and cancel_check():
+                            return
                         for u_item in unzipped_items:
+
                             u_base = os.path.basename(u_item)
                             if not self.is_garbage(u_base):
                                 self.files_to_process.append(u_item)
