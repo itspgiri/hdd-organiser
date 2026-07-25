@@ -52,20 +52,33 @@ class DateExtractor:
         # 6. Fallback
         return None, None
 
+    EXIF_EXTENSIONS = {".jpg", ".jpeg", ".tif", ".tiff", ".cr2", ".nef", ".arw", ".dng"}
+
     def _get_exif_date(self, filepath: str) -> Optional[str]:
         """Lightweight EXIF extraction reading only headers."""
+        _, ext = os.path.splitext(filepath)
+        if ext.lower() not in self.EXIF_EXTENSIONS:
+            return None
+
+        import sys
+        import io
         try:
             # We only read the first few KB, avoiding loading a 50MB RAW into memory
-            with open(filepath, 'rb') as f:
-                tags = exifread.process_file(f, stop_tag="EXIF DateTimeOriginal", details=False)
-                
-                # Priority: DateTimeOriginal > DateTimeDigitized > Image DateTime
-                if 'EXIF DateTimeOriginal' in tags:
-                    return str(tags['EXIF DateTimeOriginal'])
-                elif 'EXIF DateTimeDigitized' in tags:
-                    return str(tags['EXIF DateTimeDigitized'])
-                elif 'Image DateTime' in tags:
-                    return str(tags['Image DateTime'])
+            old_stderr = sys.stderr
+            sys.stderr = io.StringIO()
+            try:
+                with open(filepath, 'rb') as f:
+                    tags = exifread.process_file(f, stop_tag="EXIF DateTimeOriginal", details=False, log_level="CRITICAL")
+            finally:
+                sys.stderr = old_stderr
+
+            # Priority: DateTimeOriginal > DateTimeDigitized > Image DateTime
+            if 'EXIF DateTimeOriginal' in tags:
+                return str(tags['EXIF DateTimeOriginal'])
+            elif 'EXIF DateTimeDigitized' in tags:
+                return str(tags['EXIF DateTimeDigitized'])
+            elif 'Image DateTime' in tags:
+                return str(tags['Image DateTime'])
         except Exception:
             pass
         return None

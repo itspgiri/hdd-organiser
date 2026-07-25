@@ -1,6 +1,6 @@
 import os
 from typing import List, Dict, Set, Tuple
-from src.categorizer import Categorizer
+from .categorizer import Categorizer
 
 GARBAGE_FILES = {
     ".DS_Store", ".localized", "Thumbs.db", ".Spotlight-V100", ".fseventsd"
@@ -33,8 +33,8 @@ class Scanner:
                 dirs.clear() # Stop walking this branch
                 continue
 
-            # 2. Check if this is a Code Project
-            if self.categorizer.is_project_root(root):
+            # 2. Check if this is a Code Project (subdirectories only, not source root itself)
+            if root != source_path and self.categorizer.is_project_root(root):
                 self.projects_found.append(root)
                 dirs.clear() # Do not traverse INSIDE the project!
                 continue

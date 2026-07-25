@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drive Organizer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <main class="app-container">
+        <!-- GUIDE VIEW -->
+        <div id="guide-view" class="view active">
+            <div class="header-icon">🚀</div>
+            <h1>Welcome to Drive Organizer</h1>
+            <p class="subtitle">Effortlessly sort your messy folders safely.</p>
+            
+            <div class="guide-steps">
+                <div class="step">
+                    <span class="step-num">1</span>
+                    <p>Select your messy <strong>Source Folder</strong>.</p>
+                </div>
+                <div class="step">
+                    <span class="step-num">2</span>
+                    <p>Select your <strong>Destination Folder</strong>.</p>
+                </div>
+                <div class="step">
+                    <span class="step-num">3</span>
+                    <p>Click Organize and let the magic happen!</p>
+                </div>
+            </div>
+            
+            <div class="disclaimer-banner">
+                <p><strong>Note:</strong> Designed specifically for macOS. Utilizing APFS clonefile for zero-space copies and native Finder tags.</p>
+            </div>
+            
+            <button class="btn primary full-width" onclick="showView('setup-view')">Get Started</button>
+        </div>
+
+        <!-- SETUP VIEW -->
+        <div id="setup-view" class="view hidden">
+            <h2>Organization Setup</h2>
+            
+            <div class="form-group" style="margin-top: 20px;">
+                <label>1. Select Messy Source Folder (Folder to Sort)</label>
+                <div class="input-row">
+                    <input type="text" id="source-path" readonly placeholder="Choose drive or folder to organize...">
+                    <button class="btn secondary" onclick="selectFolder('source')">Browse</button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>2. Destination Strategy</label>
+                <div class="option-cards">
+                    <label class="option-card active" id="card-new" onclick="selectDestMode('new')">
+                        <input type="radio" name="dest-mode" value="new" checked style="display:none;">
+                        <div class="option-title">✨ Option A: Brand New Sorted Folder</div>
+                        <div class="option-desc">Organize into a fresh destination folder on your drive.</div>
+                    </label>
+                    <label class="option-card" id="card-merge" onclick="selectDestMode('merge')">
+                        <input type="radio" name="dest-mode" value="merge" style="display:none;">
+                        <div class="option-title">📂 Option B: Merge into Already Sorted Folder</div>
+                        <div class="option-desc">Add files to an existing organized folder. Deduplication prevents duplicates.</div>
+                    </label>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>3. Select Destination Folder</label>
+                <div class="input-row">
+                    <input type="text" id="dest-path" readonly placeholder="Choose destination folder...">
+                    <button class="btn secondary" onclick="selectFolder('dest')">Browse</button>
+                </div>
+            </div>
+
+            <div class="form-group mode-box">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="preview-mode" checked>
+                    <span><strong>Run in Dry-Run / Preview Mode first (Recommended)</strong></span>
+                </label>
+                <p class="small-hint">Scans drive, calculates space, and shows duplicate count without moving any files.</p>
+            </div>
+
+            <div class="actions">
+                <button class="btn secondary" onclick="showView('guide-view')" style="width: 30%;">Back</button>
+                <button class="btn primary" id="start-btn" onclick="startOrganizing()" style="width: 65%; float: right;">Start Organizing</button>
+            </div>
+        </div>
+
+        <!-- PROGRESS VIEW -->
+        <div id="progress-view" class="view hidden">
+            <h2 id="status-heading">Organizing Files...</h2>
+            <div class="progress-container">
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="progress-fill"></div>
+                </div>
+                <div class="progress-text">
+                    <span id="progress-percentage">0%</span>
+                    <span id="progress-count">0 / 0</span>
+                </div>
+            </div>
+            <p id="current-message" class="current-message">Initializing...</p>
+            
+            <div class="log-container" id="log-container">
+                <div class="log-content" id="log-content"></div>
+            </div>
+
+            <div id="confirm-box" class="confirm-box hidden" style="margin-top: 15px;">
+                <div class="confirm-title">✓ Preview Completed! Everything looks good.</div>
+                <p class="confirm-desc">Ready to transfer files into your destination folder?</p>
+                <div class="actions" style="margin-top: 15px;">
+                    <button class="btn secondary" onclick="resetToSetup()" style="width: 30%;">Setup</button>
+                    <button class="btn success-btn" id="confirm-go-btn" onclick="executeFullCopy()" style="width: 65%; float: right;">🚀 YES, Execute Full Transfer!</button>
+                </div>
+            </div>
+
+            <!-- POST-TRANSFER REVIEW TOOLS -->
+            <div id="review-panel" class="review-panel hidden" style="margin-top: 20px;">
+                <h3>🛠️ Post-Organization Review & Tools</h3>
+                <p class="small-hint" style="margin-left: 0; margin-bottom: 12px;">Refine your organized folders or clean up duplicate files on your source drive.</p>
+
+                <div class="review-grid">
+                    <button class="btn secondary" onclick="loadProjectReview()">🔍 Review Code Projects & Dissolve</button>
+                    <button class="btn secondary" onclick="loadDuplicateCleaner()">🗑️ Clean Source Duplicates</button>
+                </div>
+
+                <div id="review-content-area" class="review-content-area hidden" style="margin-top: 15px;"></div>
+            </div>
+
+            <div class="actions" id="default-actions" style="margin-top: 20px;">
+                <button class="btn secondary full-width" id="done-btn" onclick="resetToSetup()" disabled>Return to Setup</button>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

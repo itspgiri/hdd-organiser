@@ -18,7 +18,7 @@ else
 fi
 
 # Run the python script interactively
-python3 organizer.py
+python3 main.py
 
 # Keep terminal open if there's an error or it finishes
 echo ""

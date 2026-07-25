@@ -1,2 +1,7 @@
 .venv/
 .DS_Store
+__pycache__/
+*.pyc
+*.db
+.organizer_checkpoint.db
+test_env/

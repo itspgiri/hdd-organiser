@@ -1,0 +1,403 @@
+:root {
+    --bg-color: #ffffff;
+    --text-color: #1d1d1f;
+    --border-color: rgba(0, 0, 0, 0.1);
+    --primary-color: #0071e3;
+    --primary-hover: #0077ed;
+    --secondary-bg: #f5f5f7;
+    --secondary-hover: #e8e8ed;
+    --success-color: #34c759;
+    --error-color: #ff3b30;
+    --glass-bg: rgba(255, 255, 255, 0.9);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg-color: #1e1e1e;
+        --text-color: #f5f5f7;
+        --border-color: rgba(255, 255, 255, 0.1);
+        --primary-color: #0a84ff;
+        --primary-hover: #0071e3;
+        --secondary-bg: #2c2c2e;
+        --secondary-hover: #3a3a3c;
+        --glass-bg: rgba(30, 30, 30, 0.9);
+    }
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+.app-container {
+    padding: 30px 40px;
+    max-width: 100%;
+}
+
+h1 {
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    text-align: center;
+}
+
+h2 {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 15px;
+}
+
+.subtitle {
+    text-align: center;
+    color: var(--text-color);
+    opacity: 0.7;
+    margin-bottom: 30px;
+    font-size: 15px;
+}
+
+.header-icon {
+    font-size: 48px;
+    text-align: center;
+    margin-bottom: 10px;
+}
+
+.view {
+    display: none;
+    animation: fadeIn 0.3s ease;
+}
+
+.view.active {
+    display: block;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Guide specific */
+.guide-steps {
+    background: var(--secondary-bg);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.step {
+    display: flex;
+    align-items: center;
+    margin-bottom: 16px;
+    font-size: 14px;
+}
+
+.step:last-child {
+    margin-bottom: 0;
+}
+
+.step-num {
+    background: var(--primary-color);
+    color: white;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: bold;
+    margin-right: 15px;
+    flex-shrink: 0;
+}
+
+.disclaimer-banner {
+    background-color: rgba(255, 149, 0, 0.1);
+    color: #cc7a00;
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 24px;
+    font-size: 13px;
+    line-height: 1.4;
+    border: 1px solid rgba(255, 149, 0, 0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+    .disclaimer-banner {
+        color: #ff9f0a;
+    }
+}
+
+.info-banner {
+    background-color: rgba(10, 132, 255, 0.1);
+    color: var(--primary-color);
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+/* Forms and buttons */
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    opacity: 0.8;
+}
+
+.input-row {
+    display: flex;
+    gap: 10px;
+}
+
+/* Option cards and toggles */
+.option-cards {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.option-card {
+    flex: 1;
+    background: var(--secondary-bg);
+    border: 2px solid transparent;
+    border-radius: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.option-card:hover {
+    background: var(--secondary-hover);
+}
+
+.option-card.active {
+    border-color: var(--primary-color);
+    background: rgba(10, 132, 255, 0.08);
+}
+
+.option-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: var(--text-color);
+}
+
+.option-desc {
+    font-size: 11px;
+    opacity: 0.7;
+    line-height: 1.3;
+}
+
+.mode-box {
+    background: rgba(52, 199, 89, 0.08);
+    border: 1px dashed rgba(52, 199, 89, 0.4);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-top: 15px;
+}
+
+.checkbox-label {
+    display: flex !important;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    cursor: pointer;
+    margin-bottom: 4px !important;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary-color);
+}
+
+.small-hint {
+    font-size: 11px;
+    opacity: 0.7;
+    margin-left: 26px;
+}
+
+input[type="text"] {
+    flex-grow: 1;
+    padding: 12px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-color);
+    color: var(--text-color);
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+input[type="text"]:focus {
+    border-color: var(--primary-color);
+}
+
+.btn {
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+    outline: none;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn.primary {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.btn.primary:hover:not(:disabled) {
+    background-color: var(--primary-hover);
+    transform: scale(1.02);
+}
+
+.btn.secondary {
+    background-color: var(--secondary-bg);
+    color: var(--text-color);
+}
+
+.btn.secondary:hover:not(:disabled) {
+    background-color: var(--secondary-hover);
+}
+
+.full-width {
+    width: 100%;
+}
+
+.actions {
+    margin-top: 30px;
+    display: flow-root;
+}
+
+/* Progress View */
+.progress-container {
+    margin-bottom: 12px;
+}
+
+.progress-bar-bg {
+    height: 8px;
+    background-color: var(--secondary-bg);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background-color: var(--primary-color);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.progress-text {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    font-weight: 600;
+    opacity: 0.7;
+}
+
+.current-message {
+    font-size: 14px;
+    margin-bottom: 20px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.9;
+}
+
+.confirm-box {
+    background: rgba(52, 199, 89, 0.12);
+    border: 1px solid rgba(52, 199, 89, 0.4);
+    border-radius: 10px;
+    padding: 16px;
+}
+
+.confirm-box.hidden {
+    display: none;
+}
+
+.confirm-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--success-color);
+    margin-bottom: 4px;
+}
+
+.confirm-desc {
+    font-size: 13px;
+    opacity: 0.8;
+}
+
+.btn.success-btn {
+    background-color: #34c759;
+    color: white;
+}
+
+.review-panel {
+    background: var(--secondary-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 16px;
+}
+
+.review-panel.hidden {
+    display: none;
+}
+
+.review-grid {
+    display: flex;
+    gap: 10px;
+}
+
+.review-grid .btn {
+    flex: 1;
+    font-size: 12px;
+    padding: 10px;
+}
+
+.review-content-area {
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.review-content-area.hidden {
+    display: none;
+}
+
+.project-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 13px;
+}
+
+.project-item:last-child {
+    border-bottom: none;
+}

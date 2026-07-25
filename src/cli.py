@@ -5,13 +5,13 @@ import subprocess
 from typing import Dict, Tuple
 
 from rich.prompt import Prompt, Confirm
-from src.utils import print_header, print_success, print_error, print_info, print_warning, get_progress_bar
-from src.categorizer import Categorizer
-from src.scanner import Scanner
-from src.dates import DateExtractor
-from src.file_ops import FileEngine
+from .utils import print_header, print_success, print_error, print_info, print_warning, get_progress_bar
+from .categorizer import Categorizer
+from .scanner import Scanner
+from .dates import DateExtractor
+from .file_ops import FileEngine
 
-def main():
+def run_cli():
     print_header("Drive Organizer 🚀")
     
     parser = argparse.ArgumentParser(description="Organize hard drives safely.")
@@ -52,7 +52,12 @@ def main():
     print_success(f"Source: {source_abs}")
     print_success(f"Destination: {dest_abs}")
     
-    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    import sys
+    if getattr(sys, 'frozen', False):
+        config_path = os.path.join(sys._MEIPASS, "config.json")
+    else:
+        config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    
     if not os.path.exists(config_path):
         print_error("config.json is missing!")
         return
@@ -65,11 +70,30 @@ def main():
     print_info(f"Scanning {source_abs} for files... (This may take a minute)")
     scanner.scan_directory(source_abs)
     
-    print_success(f"Found {len(scanner.files_to_process)} files to organize.")
+    # Calculate total size of files to process
+    total_size_bytes = 0
+    for fp in scanner.files_to_process:
+        try:
+            total_size_bytes += os.path.getsize(fp)
+        except OSError:
+            pass
+            
+    from .utils import format_size
+    print_success(f"Found {len(scanner.files_to_process)} files ({format_size(total_size_bytes)}) to organize.")
     print_success(f"Found {len(scanner.projects_found)} entire code projects.")
     if scanner.ignored_garbage_count > 0:
         print_info(f"Safely ignored {scanner.ignored_garbage_count} system/garbage files.")
     
+    # Pre-flight disk space check
+    try:
+        dest_parent = dest_abs if os.path.exists(dest_abs) else os.path.dirname(dest_abs)
+        free_bytes = shutil.disk_usage(dest_parent).free
+        print_info(f"Destination free space: {format_size(free_bytes)}")
+        if free_bytes < total_size_bytes:
+            print_warning("Destination drive free space is less than total file size. If running across different physical volumes, make sure you have sufficient space.")
+    except Exception:
+        pass
+
     if len(scanner.files_to_process) == 0 and len(scanner.projects_found) == 0:
         print_warning("No files to move!")
         return
@@ -96,8 +120,16 @@ def main():
     dates = DateExtractor(categorizer)
     engine.start_caffeinate()
     
-    # A tiny cache for Live Photos to pair MOV and HEIC dates
+    # Pre-pass: Index HEIC dates for Live Photos (pairs HEIC + MOV)
     live_photo_dates: Dict[str, Tuple[str, str]] = {}
+    for fp in scanner.files_to_process:
+        fn = os.path.basename(fp)
+        if fn.lower().endswith('.heic'):
+            y, m = dates.extract_date(fp)
+            if y and m:
+                name_only, _ = os.path.splitext(fn)
+                lookup_key = os.path.join(os.path.dirname(fp), name_only)
+                live_photo_dates[lookup_key] = (y, m)
 
     try:
         with get_progress_bar() as progress:
@@ -126,17 +158,11 @@ def main():
                 if category == "Media":
                     year, month = dates.extract_date(file_path)
                     
-                    # Live Photo Glue logic (Pairing HEIC and MOV)
                     name_only, ext = os.path.splitext(filename)
-                    ext = ext.lower()
                     lookup_key = os.path.join(os.path.dirname(file_path), name_only)
                     
-                    if year and month:
-                        if ext == ".heic":
-                            live_photo_dates[lookup_key] = (year, month)
-                    else:
-                        # Fallback for missing date
-                        if ext == ".mov" and lookup_key in live_photo_dates:
+                    if not (year and month):
+                        if lookup_key in live_photo_dates:
                             year, month = live_photo_dates[lookup_key]
                             
                     if year and month:
@@ -154,11 +180,11 @@ def main():
                 except OSError:
                     continue # File disappeared during run
 
-                final_dest = engine.resolve_destination(target_base, filename, size, file_path)
+                final_dest, part_hash = engine.resolve_destination(target_base, filename, size, file_path)
                 
                 if final_dest is None:
                     # Duplicate skipped
-                    engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime)
+                    engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime, part_hash)
                     continue
                     
                 engine.copy_file(file_path, final_dest)
@@ -167,7 +193,7 @@ def main():
                 if "Unsorted" in rel_dest:
                     engine.set_finder_tag(final_dest, "5", "To Review")
                     
-                engine.record_copy(file_path, final_dest, size, mtime)
+                engine.record_copy(file_path, final_dest, size, mtime, part_hash)
 
         print_success("\nAll done! 100% of files organized safely.")
     
@@ -193,4 +219,4 @@ def _macos_choose_folder(prompt_text: str) -> str:
     return result.stdout.strip()
 
 if __name__ == "__main__":
-    main()
+    run_cli()

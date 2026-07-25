@@ -14,7 +14,7 @@ class FileEngine:
         self.caffeinate_process = None
 
     def _init_db(self):
-        """Initializes SQLite database for ACID guarantees during transfer."""
+        """Initializes SQLite database for ACID guarantees and content deduplication during transfer."""
         self.conn = sqlite3.connect(self.db_path)
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS copies (
@@ -22,9 +22,17 @@ class FileEngine:
                 dest_path TEXT,
                 status TEXT,
                 size INTEGER,
-                mtime REAL
+                mtime REAL,
+                part_hash TEXT
             )
         ''')
+        # Check if part_hash column exists (migration for existing DBs)
+        cursor = self.conn.execute("PRAGMA table_info(copies)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'part_hash' not in columns:
+            self.conn.execute("ALTER TABLE copies ADD COLUMN part_hash TEXT")
+        
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_size_hash ON copies(size, part_hash)")
         self.conn.commit()
 
     def start_caffeinate(self):
@@ -44,12 +52,15 @@ class FileEngine:
         row = cursor.fetchone()
         return row is not None and row[0] == 'completed'
 
-    def record_copy(self, source_path: str, dest_path: str, size: int, mtime: float):
-        """Atomic write to checkpoint DB."""
+    def record_copy(self, source_path: str, dest_path: str, size: int, mtime: float, part_hash: str = ""):
+        """Atomic write to checkpoint DB with size and hash indexing."""
+        if not part_hash and dest_path != "DUPLICATE_SKIPPED" and os.path.exists(dest_path):
+            part_hash = self._get_part_hash(dest_path, size)
+        
         self.conn.execute('''
-            INSERT OR REPLACE INTO copies (source_path, dest_path, status, size, mtime)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (source_path, dest_path, 'completed', size, mtime))
+            INSERT OR REPLACE INTO copies (source_path, dest_path, status, size, mtime, part_hash)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (source_path, dest_path, 'completed', size, mtime, part_hash))
         self.conn.commit()
 
     def set_finder_tag(self, filepath: str, color_num: str, tag_name: str):
@@ -79,26 +90,58 @@ class FileEngine:
             return ""
         return h.hexdigest()
 
-    def resolve_destination(self, base_dest: str, filename: str, source_size: int, source_path: str) -> Optional[str]:
+    def is_content_duplicate(self, source_path: str, size: int) -> Tuple[bool, str]:
         """
-        Calculates destination path. Handles duplicates.
-        Returns None if file is an exact duplicate (should be skipped).
-        Returns new path (with _1 suffix) if collision exists but files differ.
+        Checks if an identical file (same size & part_hash) has already been copied anywhere in dest.
+        Returns (is_dup, part_hash).
         """
+        src_hash = ""
+        # Check DB if any copied file has the exact same size
+        cursor = self.conn.execute('SELECT dest_path, part_hash FROM copies WHERE size = ? AND status = "completed" AND dest_path != "DUPLICATE_SKIPPED"', (size,))
+        rows = cursor.fetchall()
+        if not rows:
+            return False, ""
+
+        src_hash = self._get_part_hash(source_path, size)
+        if not src_hash:
+            return False, ""
+
+        for dest_path, db_hash in rows:
+            if db_hash == src_hash and db_hash != "":
+                return True, src_hash
+            # If db_hash is missing, compute it from dest_path if file exists
+            if not db_hash and os.path.exists(dest_path):
+                calc_hash = self._get_part_hash(dest_path, size)
+                if calc_hash == src_hash and calc_hash != "":
+                    return True, src_hash
+
+        return False, src_hash
+
+    def resolve_destination(self, base_dest: str, filename: str, source_size: int, source_path: str) -> Tuple[Optional[str], str]:
+        """
+        Calculates destination path. Handles global content duplicates and filename collisions.
+        Returns (None, part_hash) if file is an exact duplicate (should be skipped).
+        Returns (new_path, part_hash) if file should be copied.
+        """
+        # 1. Global content deduplication check
+        is_dup, src_hash = self.is_content_duplicate(source_path, source_size)
+        if is_dup:
+            return None, src_hash
+
         os.makedirs(os.path.dirname(base_dest), exist_ok=True)
         
         if not os.path.exists(base_dest):
-            return base_dest
+            return base_dest, src_hash
             
-        # Collision detected! Check if they are identical
+        # Collision detected! Check if destination file is identical
         dest_size = os.path.getsize(base_dest)
         if dest_size == source_size:
-            # Sizes match, do smart part-hash
-            src_hash = self._get_part_hash(source_path, source_size)
+            if not src_hash:
+                src_hash = self._get_part_hash(source_path, source_size)
             dst_hash = self._get_part_hash(base_dest, dest_size)
             if src_hash == dst_hash and src_hash != "":
                 # Identical file! Skip copying.
-                return None
+                return None, src_hash
                 
         # Sizes differ or hashes differ. Rename destination.
         name, ext = os.path.splitext(filename)
@@ -106,7 +149,7 @@ class FileEngine:
         while True:
             new_dest = os.path.join(os.path.dirname(base_dest), f"{name}_{counter}{ext}")
             if not os.path.exists(new_dest):
-                return new_dest
+                return new_dest, src_hash
             counter += 1
 
     def copy_file(self, source_path: str, target_path: str):
@@ -122,3 +165,4 @@ class FileEngine:
     def close(self):
         self.conn.close()
         self.stop_caffeinate()
+
