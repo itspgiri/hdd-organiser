@@ -194,6 +194,40 @@ def list_volumes():
 
     return jsonify({"volumes": volumes, "diskutil_summary": unmounted[:10]})
 
+@app.route("/api/open_finder", methods=["GET"])
+def open_finder():
+    folder = request.args.get("path")
+    if folder and os.path.exists(folder):
+        subprocess.run(['open', folder])
+        return jsonify({"success": True})
+    return jsonify({"success": False})
+
+@app.route("/api/export_csv", methods=["GET"])
+def export_csv():
+    dest = request.args.get("dest")
+    if not dest:
+        return "Destination path required", 400
+    db_path = os.path.join(dest, ".organizer_checkpoint.db")
+    if not os.path.exists(db_path):
+        return "No checkpoint database found", 404
+    import sqlite3, io, csv
+    conn = sqlite3.connect(db_path)
+    cursor = conn.execute("SELECT source_path, dest_path, status, size, mtime FROM copies")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Source Path", "Destination Path", "Status", "Size (Bytes)", "Modification Time"])
+    writer.writerows(rows)
+    
+    from flask import Response
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-disposition": "attachment; filename=drive_organization_report.csv"}
+    )
+
 def run_organizer(source, dest, is_preview=False, dest_mode="new", excluded_projects=None):
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)

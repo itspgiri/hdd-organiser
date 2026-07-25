@@ -341,3 +341,19 @@ async function trashAllDuplicates() {
         alert("Error moving files to trash: " + e);
     }
 }
+
+async function openDestinationInFinder() {
+    const dest = document.getElementById('dest-path').value;
+    if (!dest) return;
+    try {
+        await fetch(`/api/open_finder?path=${encodeURIComponent(dest)}`);
+    } catch (e) {
+        console.error("Error opening Finder", e);
+    }
+}
+
+function downloadAuditReport() {
+    const dest = document.getElementById('dest-path').value;
+    if (!dest) return;
+    window.location.href = `/api/export_csv?dest=${encodeURIComponent(dest)}`;
+}
