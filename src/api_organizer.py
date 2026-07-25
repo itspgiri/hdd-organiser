@@ -123,6 +123,7 @@ class OrganizerAPI:
                 category = categorizer.get_file_category(filename)
                 
                 if category == "Media":
+                    is_ss = categorizer.is_screenshot(filename)
                     year, month = dates.extract_date(file_path)
                     
                     name_only, ext = os.path.splitext(filename)
@@ -132,7 +133,12 @@ class OrganizerAPI:
                         if lookup_key in live_photo_dates:
                             year, month = live_photo_dates[lookup_key]
                             
-                    if year and month:
+                    if is_ss:
+                        if year and month:
+                            rel_dest = os.path.join("Media", year, month, "Screenshots", filename)
+                        else:
+                            rel_dest = os.path.join("Media", "Screenshots", filename)
+                    elif year and month:
                         rel_dest = os.path.join("Media", year, month, filename)
                     else:
                         rel_dest = os.path.join("Unsorted", filename)
