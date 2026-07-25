@@ -11,7 +11,9 @@ GARBAGE_PREFIXES = (
 )
 
 SKIP_SYSTEM_DIRS = {
-    ".Trash", ".thumbnails", ".fseventsd", ".Spotlight-V100", ".Trashes"
+    ".Trash", ".thumbnails", ".fseventsd", ".Spotlight-V100", ".Trashes",
+    "node_modules", ".git", "__pycache__", ".venv", "venv", ".cache", "Caches", ".tmp",
+    ".Duplicates_Trash"
 }
 
 class Scanner:
@@ -28,7 +30,7 @@ class Scanner:
             return True
         return False
 
-    def scan_directory(self, source_path, excluded_projects: Set[str] = None):
+    def scan_directory(self, source_path, excluded_projects: Set[str] = None, progress_cb = None):
         """Recursively scan directory or multiple directories, finding files and project folders."""
         excluded = excluded_projects or set()
         if isinstance(source_path, list):
@@ -36,16 +38,15 @@ class Scanner:
         else:
             sources = [p.strip() for p in source_path.split(',') if p.strip()]
 
+        scan_count = 0
         for src in sources:
             if not os.path.exists(src):
                 continue
             for root, dirs, files in os.walk(src):
-                # 1. Skip system folders completely
-                if os.path.basename(root) in SKIP_SYSTEM_DIRS:
-                    dirs.clear() # Stop walking this branch
-                    continue
+                # 1. Prune skipped system / heavy build directories in-place BEFORE entering them
+                dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS]
 
-                # 2. Check if this is a Code Project (subdirectories only, not source root itself, and not excluded)
+                # 2. Check if this is a Code Project
                 if root != src and root not in excluded and self.categorizer.is_project_root(root):
                     self.projects_found.append(root)
                     dirs.clear() # Do not traverse INSIDE the project!
@@ -59,3 +60,8 @@ class Scanner:
                         
                     full_path = os.path.join(root, file)
                     self.files_to_process.append(full_path)
+                    scan_count += 1
+
+                    if progress_cb and (scan_count % 100 == 0):
+                        progress_cb(0, 0, f"🔍 Scanning: {len(self.files_to_process)} files found... ({os.path.basename(root)})")
+

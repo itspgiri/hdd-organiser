@@ -32,9 +32,10 @@ class OrganizerAPI:
         categorizer = Categorizer(self.config_path)
         scanner = Scanner(categorizer)
         
-        self.log_cb(f"Scanning {source_abs} for files... (This may take a minute)")
+        self.log_cb(f"Scanning {source_abs} for files...")
         excluded_set = set(excluded_projects or [])
-        scanner.scan_directory(source_abs, excluded_projects=excluded_set)
+        scanner.scan_directory(source_abs, excluded_projects=excluded_set, progress_cb=self.progress_cb)
+
         
         total_bytes = 0
         category_counts: Dict[str, int] = {}
