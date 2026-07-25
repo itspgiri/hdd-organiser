@@ -551,15 +551,26 @@ input[type="text"]:focus {
     display: none;
 }
 
-.project-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--border-color);
-    font-size: 13px;
-}
-
 .project-item:last-child {
     border-bottom: none;
 }
+
+/* Premium Slim Scrollbars */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--primary-color);
+}
+
