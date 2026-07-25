@@ -25,7 +25,7 @@ class DateExtractor:
         filename = os.path.basename(filepath)
         
         # 1 & 2. Try EXIF for Media files
-        date_str = self._get_exif_date(filepath)
+        date_str = self._get_exif_date(filepath) or self._get_video_date(filepath)
         if date_str:
             parsed = self._parse_exif_date(date_str)
             if parsed[0]:
@@ -58,6 +58,29 @@ class DateExtractor:
         return None, None
 
     EXIF_EXTENSIONS = {".jpg", ".jpeg", ".tif", ".tiff", ".cr2", ".nef", ".arw", ".dng"}
+    VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".3gp"}
+
+    def _get_video_date(self, filepath: str) -> Optional[str]:
+        """Lightweight QuickTime / MP4 creation date extraction from binary atom header."""
+        ext = "." + filepath.rsplit('.', 1)[-1].lower() if '.' in filepath else ""
+        if ext not in self.VIDEO_EXTENSIONS:
+            return None
+        try:
+            with open(filepath, 'rb') as f:
+                header = f.read(65536)
+                mvhd_idx = header.find(b'mvhd')
+                if mvhd_idx != -1 and mvhd_idx + 16 <= len(header):
+                    import struct
+                    creation_bytes = header[mvhd_idx + 8 : mvhd_idx + 12]
+                    creation_time = struct.unpack(">I", creation_bytes)[0]
+                    if creation_time > 2082844800:
+                        unix_time = creation_time - 2082844800
+                        dt = datetime.datetime.fromtimestamp(unix_time, tz=datetime.timezone.utc)
+                        if 1980 <= dt.year <= 2100:
+                            return f"{dt.year}:{dt.month:02d}:01 00:00:00"
+        except Exception:
+            pass
+        return None
 
     def _get_exif_date(self, filepath: str) -> Optional[str]:
         """Lightweight EXIF extraction reading only headers."""
@@ -74,13 +97,15 @@ class DateExtractor:
             finally:
                 sys.stderr = old_stderr
 
-            # Priority: DateTimeOriginal > DateTimeDigitized > Image DateTime
+            # Priority: DateTimeOriginal > DateTimeDigitized > Image DateTime > GPS Date
             if 'EXIF DateTimeOriginal' in tags:
                 return str(tags['EXIF DateTimeOriginal'])
             elif 'EXIF DateTimeDigitized' in tags:
                 return str(tags['EXIF DateTimeDigitized'])
             elif 'Image DateTime' in tags:
                 return str(tags['Image DateTime'])
+            elif 'GPS GPSDate' in tags:
+                return str(tags['GPS GPSDate']).replace('-', ':')
         except Exception:
             pass
         return None
