@@ -31,9 +31,9 @@ class Categorizer:
     def is_project_root(self, folder_path: str) -> bool:
         """Checks if a folder contains any project markers."""
         try:
-            items = set(os.listdir(folder_path))
-            return any(marker in items for marker in self.project_markers)
-        except PermissionError:
+            items = os.listdir(folder_path)
+            return not self.project_markers.isdisjoint(items)
+        except (PermissionError, OSError):
             return False
 
     def is_screenshot(self, filename: str) -> bool:
@@ -42,6 +42,5 @@ class Categorizer:
 
     def get_file_category(self, filename: str) -> str:
         """Returns the primary category for a given file based on its extension."""
-        _, ext = os.path.splitext(filename)
-        # Default to "Unsorted" if unknown
-        return self.ext_to_category.get(ext.lower(), "Unsorted")
+        ext = "." + filename.rsplit('.', 1)[-1].lower() if '.' in filename else ""
+        return self.ext_to_category.get(ext, "Unsorted")

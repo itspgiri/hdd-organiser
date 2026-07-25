@@ -1,17 +1,21 @@
 import os
 import re
+import sys
+import io
 import datetime
 import exifread
 from typing import Optional
+
+_DUMMY_STDERR = io.StringIO()
 
 class DateExtractor:
     def __init__(self, categorizer):
         self.categorizer = categorizer
         # Common month names for folder generation
-        self.months = [
+        self.months = (
             "January", "February", "March", "April", "May", "June",
             "July", "August", "September", "October", "November", "December"
-        ]
+        )
 
     def extract_date(self, filepath: str) -> tuple[Optional[str], Optional[str]]:
         """
@@ -21,10 +25,11 @@ class DateExtractor:
         filename = os.path.basename(filepath)
         
         # 1 & 2. Try EXIF for Media files
-        if self.categorizer.get_file_category(filename) == "Media":
-            date_str = self._get_exif_date(filepath)
-            if date_str:
-                return self._parse_exif_date(date_str)
+        date_str = self._get_exif_date(filepath)
+        if date_str:
+            parsed = self._parse_exif_date(date_str)
+            if parsed[0]:
+                return parsed
                 
         # 3. Filename parsing (using precompiled regex from categorizer)
         match = self.categorizer.date_regex.search(filename)
@@ -56,16 +61,13 @@ class DateExtractor:
 
     def _get_exif_date(self, filepath: str) -> Optional[str]:
         """Lightweight EXIF extraction reading only headers."""
-        _, ext = os.path.splitext(filepath)
-        if ext.lower() not in self.EXIF_EXTENSIONS:
+        ext = "." + filepath.rsplit('.', 1)[-1].lower() if '.' in filepath else ""
+        if ext not in self.EXIF_EXTENSIONS:
             return None
 
-        import sys
-        import io
         try:
-            # We only read the first few KB, avoiding loading a 50MB RAW into memory
             old_stderr = sys.stderr
-            sys.stderr = io.StringIO()
+            sys.stderr = _DUMMY_STDERR
             try:
                 with open(filepath, 'rb') as f:
                     tags = exifread.process_file(f, stop_tag="EXIF DateTimeOriginal", details=False, log_level="CRITICAL")
