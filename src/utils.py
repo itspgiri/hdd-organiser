@@ -48,3 +48,25 @@ def format_size(size_in_bytes: int) -> str:
             return f"{size_in_bytes:.2f} {unit}"
         size_in_bytes /= 1024.0
     return f"{size_in_bytes:.2f} PB"
+
+import json
+
+def load_run_history(history_file: str) -> list:
+    if not os.path.exists(history_file):
+        return []
+    try:
+        with open(history_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_run_to_history(history_file: str, run_data: dict):
+    history = load_run_history(history_file)
+    history.insert(0, run_data)
+    history = history[:50]
+    try:
+        with open(history_file, 'w', encoding='utf-8') as f:
+            json.dump(history, f, indent=2)
+    except Exception:
+        pass
+

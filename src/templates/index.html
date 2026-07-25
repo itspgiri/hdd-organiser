@@ -19,6 +19,8 @@
                 <span class="crumb" id="crumb-setup" onclick="showView('setup-view')">Setup</span>
                 <span class="crumb-separator">›</span>
                 <span class="crumb" id="crumb-progress">Preview & Run</span>
+                <span class="crumb-separator">›</span>
+                <span class="crumb" id="crumb-history" onclick="loadHistoryView()">📜 Past Runs</span>
             </div>
         </nav>
 
@@ -48,7 +50,28 @@
             </div>
             
             <button class="btn primary full-width" onclick="showView('setup-view')">Get Started</button>
+            <div style="margin-top: 10px;">
+                <button class="btn secondary full-width" onclick="loadHistoryView()">📜 View Past Runs & Audit Reports</button>
+            </div>
         </div>
+
+        <!-- HISTORY VIEW -->
+        <div id="history-view" class="view hidden">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h2>📜 Past Runs & Audit Reports</h2>
+                <button class="btn secondary" style="font-size: 11px; padding: 4px 10px;" onclick="clearHistoryLog()">🗑️ Clear History</button>
+            </div>
+            <p class="small-hint" style="margin-left: 0; margin-bottom: 15px;">Access details and download CSV audit reports for all your past organization runs.</p>
+
+            <div id="history-list-container" style="max-height: 380px; overflow-y: auto;">
+                <div>Loading history...</div>
+            </div>
+
+            <div class="actions" style="margin-top: 20px;">
+                <button class="btn secondary full-width" onclick="showView('setup-view')">◄ Return to Setup</button>
+            </div>
+        </div>
+
 
         <!-- SETUP VIEW -->
         <div id="setup-view" class="view hidden">
@@ -99,7 +122,11 @@
                 <button class="btn secondary" onclick="showView('guide-view')" style="width: 30%;">Back</button>
                 <button class="btn primary" id="start-btn" onclick="startOrganizing()" style="width: 65%; float: right;">Start Organizing</button>
             </div>
+            <div style="margin-top: 15px; text-align: center;">
+                <button class="btn secondary" style="font-size: 12px; width: 100%;" onclick="loadHistoryView()">📜 View Past Runs & Audit Reports</button>
+            </div>
         </div>
+
 
         <!-- PROGRESS VIEW -->
         <div id="progress-view" class="view hidden">
@@ -157,6 +184,10 @@
                 <div class="review-grid" style="margin-top: 10px;">
                     <button class="btn primary" onclick="openDestinationInFinder()">📂 Open Destination Folder in Finder</button>
                     <button class="btn secondary" onclick="downloadAuditReport()">📊 Export CSV Audit Log</button>
+                </div>
+
+                <div class="review-grid" style="margin-top: 10px;">
+                    <button class="btn success-btn" style="grid-column: span 2;" onclick="runVerificationChecker()">✅ Run Integrity Verification Checker</button>
                 </div>
 
                 <div id="review-content-area" class="review-content-area hidden" style="margin-top: 15px;"></div>

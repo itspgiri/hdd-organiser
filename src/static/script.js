@@ -27,6 +27,10 @@ function showView(viewId) {
     if (viewId === 'guide-view') document.getElementById('crumb-guide').classList.add('active');
     if (viewId === 'setup-view') document.getElementById('crumb-setup').classList.add('active');
     if (viewId === 'progress-view') document.getElementById('crumb-progress').classList.add('active');
+    if (viewId === 'history-view') {
+        const crumbHist = document.getElementById('crumb-history');
+        if (crumbHist) crumbHist.classList.add('active');
+    }
 }
 
 function navigateBack() {
@@ -43,8 +47,13 @@ function navigateBack() {
         if (prevView === 'guide-view') document.getElementById('crumb-guide').classList.add('active');
         if (prevView === 'setup-view') document.getElementById('crumb-setup').classList.add('active');
         if (prevView === 'progress-view') document.getElementById('crumb-progress').classList.add('active');
+        if (prevView === 'history-view') {
+            const crumbHist = document.getElementById('crumb-history');
+            if (crumbHist) crumbHist.classList.add('active');
+        }
     }
 }
+
 
 async function selectFolder(type) {
     const promptText = type === 'source' 
@@ -392,3 +401,144 @@ function downloadAuditReport() {
     if (!dest) return;
     window.location.href = `/api/export_csv?dest=${encodeURIComponent(dest)}`;
 }
+
+async function runVerificationChecker() {
+    const dest = document.getElementById('dest-path').value;
+    const area = document.getElementById('review-content-area');
+    if (!dest) return;
+    area.classList.remove('hidden');
+    area.innerHTML = "<div>Running 100% SHA-256 Hash & File Size Integrity Verification Check...</div>";
+
+    try {
+        const response = await fetch(`/api/verify_transfer?dest=${encodeURIComponent(dest)}`);
+        const data = await response.json();
+        
+        if (!data.success) {
+            area.innerHTML = `<div style="color: var(--danger-color); font-size: 12px;">⚠️ ${data.error}</div>`;
+            return;
+        }
+
+        if (data.is_perfect) {
+            area.innerHTML = `
+            <div style="background: rgba(46, 204, 113, 0.15); border: 1px solid #2ecc71; padding: 12px; border-radius: 8px;">
+                <div style="color: #2ecc71; font-weight: bold; font-size: 14px;">🟢 100% Integrity Verified & Safe to Delete!</div>
+                <div style="font-size: 12px; margin-top: 6px;">
+                    • Total Files Checked: <strong>${data.total_files}</strong><br>
+                    • Successfully Verified Copied Files: <strong>${data.verified_count}</strong><br>
+                    • Skipped Duplicates (Intact at destination): <strong>${data.skipped_duplicates}</strong><br>
+                    • Missing Files: <strong>0</strong><br>
+                    • Corrupted / Mismatched Files: <strong>0</strong>
+                </div>
+                <div style="font-size: 11px; margin-top: 8px; opacity: 0.8;">
+                    ✓ All files exist at destination with exact byte size & hash match. It is now 100% safe to delete your original source folder!
+                </div>
+            </div>`;
+        } else {
+            let errorHtml = "";
+            if (data.missing_count > 0) {
+                errorHtml += `<div><strong>Missing Files (${data.missing_count}):</strong> ${data.missing_list.join(', ')}</div>`;
+            }
+            if (data.mismatched_count > 0) {
+                errorHtml += `<div><strong>Mismatched Files (${data.mismatched_count}):</strong> ${data.mismatched_list.join(', ')}</div>`;
+            }
+            area.innerHTML = `
+            <div style="background: rgba(231, 76, 60, 0.15); border: 1px solid #e74c3c; padding: 12px; border-radius: 8px;">
+                <div style="color: #e74c3c; font-weight: bold; font-size: 14px;">⚠️ Verification Warning: Mismatches Found</div>
+                <div style="font-size: 12px; margin-top: 6px;">
+                    • Total Files Checked: <strong>${data.total_files}</strong><br>
+                    • Verified Files: <strong>${data.verified_count}</strong><br>
+                    • Missing Files: <strong>${data.missing_count}</strong><br>
+                    • Corrupted / Mismatched Files: <strong>${data.mismatched_count}</strong>
+                </div>
+                <div style="font-size: 11px; margin-top: 8px;">
+                    ${errorHtml}
+                </div>
+            </div>`;
+        }
+    } catch (e) {
+        area.innerHTML = "<div>Error running verification check</div>";
+    }
+}
+
+async function loadHistoryView() {
+    showView('history-view');
+    const container = document.getElementById('history-list-container');
+    container.innerHTML = "<div>Loading past runs...</div>";
+
+    try {
+        const response = await fetch('/api/history');
+        const data = await response.json();
+        const runs = data.history || [];
+
+        if (runs.length === 0) {
+            container.innerHTML = "<div style='font-size: 13px; opacity: 0.7; padding: 20px; text-align: center;'>No past organization runs recorded yet. Run your first organization to generate audit history!</div>";
+            return;
+        }
+
+        let html = "";
+        runs.forEach(run => {
+            const isCompleted = run.status === 'Completed';
+            const badgeColor = isCompleted ? '#2ecc71' : '#f39c12';
+            html += `
+            <div style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 12px; margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <strong style="font-size: 13px;">🕒 ${run.timestamp}</strong>
+                    <span style="font-size: 10px; background: ${badgeColor}; color: #fff; padding: 2px 8px; border-radius: 10px; font-weight: bold;">${run.status}</span>
+                </div>
+                <div style="font-size: 11px; opacity: 0.9; margin-bottom: 4px;">
+                    📂 <strong>Source:</strong> ${run.source}<br>
+                    🎯 <strong>Destination:</strong> ${run.dest}
+                </div>
+                <div style="font-size: 11px; opacity: 0.7; margin-bottom: 8px;">
+                    📊 <strong>Files:</strong> ${run.total_files} files (${run.total_size}) • <strong>Code Projects:</strong> ${run.projects_count || 0}
+                </div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
+                    <button class="btn secondary" style="font-size: 10px; padding: 4px 8px;" onclick="downloadHistoryCSV('${run.dest.replace(/\\/g, '\\\\')}')">
+                        📊 Download CSV Audit Log
+                    </button>
+                    <button class="btn secondary" style="font-size: 10px; padding: 4px 8px;" onclick="verifyHistoryRun('${run.dest.replace(/\\/g, '\\\\')}')">
+                        ✅ Run Integrity Check
+                    </button>
+                    <button class="btn secondary" style="font-size: 10px; padding: 4px 8px;" onclick="openHistoryFinder('${run.dest.replace(/\\/g, '\\\\')}')">
+                        📂 Open Destination in Finder
+                    </button>
+                </div>
+            </div>`;
+        });
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = "<div>Error loading past runs history</div>";
+    }
+}
+
+function downloadHistoryCSV(destPath) {
+    if (!destPath) return;
+    window.location.href = `/api/export_csv?dest=${encodeURIComponent(destPath)}`;
+}
+
+async function verifyHistoryRun(destPath) {
+    if (!destPath) return;
+    document.getElementById('dest-path').value = destPath;
+    showView('progress-view');
+    document.getElementById('review-panel').classList.remove('hidden');
+    await runVerificationChecker();
+}
+
+async function openHistoryFinder(destPath) {
+    if (!destPath) return;
+    try {
+        await fetch(`/api/open_finder?path=${encodeURIComponent(destPath)}`);
+    } catch (e) {}
+}
+
+async function clearHistoryLog() {
+    if (!confirm("Are you sure you want to clear all past run history?")) return;
+    try {
+        await fetch('/api/clear_history', { method: 'POST' });
+        loadHistoryView();
+    } catch (e) {
+        alert("Error clearing history");
+    }
+}
+
+

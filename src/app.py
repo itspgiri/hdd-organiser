@@ -233,7 +233,36 @@ def export_csv():
         headers={"Content-disposition": "attachment; filename=drive_organization_report.csv"}
     )
 
+@app.route("/api/verify_transfer", methods=["GET"])
+def verify_transfer():
+    dest = request.args.get("dest")
+    if not dest or not os.path.exists(dest):
+        return jsonify({"success": False, "error": "Destination path required"})
+    config_path = os.path.join(base_dir, "config.json")
+    api = OrganizerAPI(config_path, log_cb, progress_cb)
+    res = api.verify_transfer(dest)
+    return jsonify(res)
+
+@app.route("/api/history", methods=["GET"])
+def get_history():
+    from .utils import load_run_history
+    history_file = os.path.join(base_dir, "run_history.json")
+    runs = load_run_history(history_file)
+    return jsonify({"history": runs})
+
+@app.route("/api/clear_history", methods=["POST"])
+def clear_history():
+    history_file = os.path.join(base_dir, "run_history.json")
+    if os.path.exists(history_file):
+        try:
+            os.remove(history_file)
+        except Exception:
+            pass
+    return jsonify({"success": True})
+
+
 def run_organizer(source, dest, is_preview=False, dest_mode="new", excluded_projects=None):
+
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
     success = api.run(source, dest, is_preview=is_preview, dest_mode=dest_mode, excluded_projects=excluded_projects)

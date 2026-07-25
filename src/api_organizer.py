@@ -203,11 +203,35 @@ class OrganizerAPI:
                 
             self.progress_cb(total_files, total_files, "Complete")
             self.log_cb("All done! 100% of files organized safely.")
+
+            # Record history
+            try:
+                from datetime import datetime
+                from .utils import save_run_to_history
+                history_file = os.path.join(os.path.dirname(self.config_path), "run_history.json")
+                timestamp_str = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+                run_record = {
+                    "id": f"run_{int(time.time())}",
+                    "timestamp": timestamp_str,
+                    "source": source_abs,
+                    "dest": dest_abs,
+                    "is_preview": False,
+                    "dest_mode": dest_mode,
+                    "total_files": len(scanner.files_to_process),
+                    "total_size": size_str,
+                    "projects_count": len(scanner.projects_found),
+                    "status": "Completed"
+                }
+                save_run_to_history(history_file, run_record)
+            except Exception:
+                pass
+
             try:
                 subprocess.Popen(["afplay", "/System/Library/Sounds/Glass.aiff"])
             except Exception:
                 pass
             return True
+
             
         except Exception as e:
             self.log_cb(f"Error occurred: {str(e)}")
@@ -307,3 +331,72 @@ class OrganizerAPI:
                 if res.returncode == 0:
                     trashed_count += 1
         return trashed_count
+
+    def verify_transfer(self, dest_abs: str) -> dict:
+        """
+        Post-transfer automated verification checker.
+        Verifies existence, file size, and SHA-256 hash of all copied files.
+        """
+        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db")
+        if not os.path.exists(db_path):
+            return {
+                "success": False,
+                "error": "No checkpoint database found at destination."
+            }
+
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("SELECT source_path, dest_path, status, size, part_hash FROM copies")
+        rows = cursor.fetchall()
+        conn.close()
+
+        engine = FileEngine(dest_abs)
+
+        total_files = len(rows)
+        verified_count = 0
+        missing_count = 0
+        mismatched_count = 0
+        skipped_dup_count = 0
+        missing_list = []
+        mismatched_list = []
+
+        for source_path, dest_path, status, size, part_hash in rows:
+            if dest_path == "DUPLICATE_SKIPPED":
+                skipped_dup_count += 1
+                continue
+
+            if not os.path.exists(dest_path):
+                missing_count += 1
+                missing_list.append(dest_path)
+                continue
+
+            dest_size = os.path.getsize(dest_path)
+            if dest_size != size:
+                mismatched_count += 1
+                mismatched_list.append(f"{dest_path} (Size mismatch: expected {size}, got {dest_size})")
+                continue
+
+            if part_hash:
+                dest_hash = engine._get_part_hash(dest_path, dest_size)
+                if dest_hash and dest_hash != part_hash:
+                    mismatched_count += 1
+                    mismatched_list.append(f"{dest_path} (Hash mismatch)")
+                    continue
+
+            verified_count += 1
+
+        engine.close()
+
+        is_perfect = (missing_count == 0 and mismatched_count == 0 and (verified_count + skipped_dup_count) == total_files)
+
+        return {
+            "success": True,
+            "total_files": total_files,
+            "verified_count": verified_count,
+            "skipped_duplicates": skipped_dup_count,
+            "missing_count": missing_count,
+            "mismatched_count": mismatched_count,
+            "missing_list": missing_list[:10],
+            "mismatched_list": mismatched_list[:10],
+            "is_perfect": is_perfect
+        }
+
