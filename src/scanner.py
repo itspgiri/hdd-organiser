@@ -10,6 +10,10 @@ GARBAGE_PREFIXES = (
     "._", "~$"
 )
 
+SKIP_SYSTEM_DIRS = {
+    ".Trash", ".thumbnails", ".fseventsd", ".Spotlight-V100", ".Trashes"
+}
+
 class Scanner:
     def __init__(self, categorizer: Categorizer):
         self.categorizer = categorizer
@@ -37,7 +41,7 @@ class Scanner:
                 continue
             for root, dirs, files in os.walk(src):
                 # 1. Skip system folders completely
-                if os.path.basename(root) in {".Trash", ".thumbnails"}:
+                if os.path.basename(root) in SKIP_SYSTEM_DIRS:
                     dirs.clear() # Stop walking this branch
                     continue
 

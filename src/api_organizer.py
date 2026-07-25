@@ -1,6 +1,11 @@
 import os
+import time
 import shutil
-from typing import Callable, Dict, Tuple
+import sqlite3
+import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Callable, Dict, Tuple, Set, List, Optional
 
 from .categorizer import Categorizer
 from .scanner import Scanner
@@ -190,8 +195,6 @@ class OrganizerAPI:
                     if idx % 5 == 0 or idx == total_files:
                         self.progress_cb(idx, total_files, f"Organizing: {filename}", eta_str)
 
-            import threading
-            from concurrent.futures import ThreadPoolExecutor
             max_workers = 4
             self.log_cb(f"Using {max_workers} safe parallel worker threads for fast transfer.")
             
@@ -201,7 +204,6 @@ class OrganizerAPI:
             self.progress_cb(total_files, total_files, "Complete")
             self.log_cb("All done! 100% of files organized safely.")
             try:
-                import subprocess
                 subprocess.Popen(["afplay", "/System/Library/Sounds/Glass.aiff"])
             except Exception:
                 pass
