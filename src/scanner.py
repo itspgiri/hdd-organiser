@@ -24,27 +24,34 @@ class Scanner:
             return True
         return False
 
-    def scan_directory(self, source_path: str, excluded_projects: Set[str] = None):
-        """Recursively scan directory, finding files and project folders."""
+    def scan_directory(self, source_path, excluded_projects: Set[str] = None):
+        """Recursively scan directory or multiple directories, finding files and project folders."""
         excluded = excluded_projects or set()
-        for root, dirs, files in os.walk(source_path):
-            
-            # 1. Skip system folders completely
-            if os.path.basename(root) in {".Trash", ".thumbnails"}:
-                dirs.clear() # Stop walking this branch
-                continue
+        if isinstance(source_path, list):
+            sources = source_path
+        else:
+            sources = [p.strip() for p in source_path.split(',') if p.strip()]
 
-            # 2. Check if this is a Code Project (subdirectories only, not source root itself, and not excluded)
-            if root != source_path and root not in excluded and self.categorizer.is_project_root(root):
-                self.projects_found.append(root)
-                dirs.clear() # Do not traverse INSIDE the project!
+        for src in sources:
+            if not os.path.exists(src):
                 continue
-
-            # 3. Otherwise, process individual files
-            for file in files:
-                if self.is_garbage(file):
-                    self.ignored_garbage_count += 1
+            for root, dirs, files in os.walk(src):
+                # 1. Skip system folders completely
+                if os.path.basename(root) in {".Trash", ".thumbnails"}:
+                    dirs.clear() # Stop walking this branch
                     continue
-                    
-                full_path = os.path.join(root, file)
-                self.files_to_process.append(full_path)
+
+                # 2. Check if this is a Code Project (subdirectories only, not source root itself, and not excluded)
+                if root != src and root not in excluded and self.categorizer.is_project_root(root):
+                    self.projects_found.append(root)
+                    dirs.clear() # Do not traverse INSIDE the project!
+                    continue
+
+                # 3. Otherwise, process individual files
+                for file in files:
+                    if self.is_garbage(file):
+                        self.ignored_garbage_count += 1
+                        continue
+                        
+                    full_path = os.path.join(root, file)
+                    self.files_to_process.append(full_path)

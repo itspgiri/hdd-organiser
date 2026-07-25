@@ -48,14 +48,21 @@ function navigateBack() {
 
 async function selectFolder(type) {
     const promptText = type === 'source' 
-        ? "Select your messy SOURCE folder to organize:" 
+        ? "Select a messy SOURCE folder to organize:" 
         : "Select your DESTINATION folder (where organized files will go):";
         
     try {
         const response = await fetch(`/api/select_folder?prompt=${encodeURIComponent(promptText)}`);
         const data = await response.json();
         if (data.folder) {
-            document.getElementById(`${type}-path`).value = data.folder;
+            const input = document.getElementById(`${type}-path`);
+            if (type === 'source' && input.value.trim().length > 0) {
+                if (!input.value.includes(data.folder)) {
+                    input.value = input.value + ", " + data.folder;
+                }
+            } else {
+                input.value = data.folder;
+            }
         }
     } catch (e) {
         console.error("Error selecting folder", e);

@@ -3,6 +3,7 @@ import shutil
 import sqlite3
 import hashlib
 import subprocess
+import threading
 from typing import Optional, Tuple
 import xattr # Used for macOS Finder tags
 
@@ -10,30 +11,32 @@ class FileEngine:
     def __init__(self, dest_root: str):
         self.dest_root = dest_root
         self.db_path = os.path.join(dest_root, ".organizer_checkpoint.db")
+        self.lock = threading.Lock()
         self._init_db()
         self.caffeinate_process = None
 
     def _init_db(self):
         """Initializes SQLite database for ACID guarantees and content deduplication during transfer."""
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS copies (
-                source_path TEXT PRIMARY KEY,
-                dest_path TEXT,
-                status TEXT,
-                size INTEGER,
-                mtime REAL,
-                part_hash TEXT
-            )
-        ''')
-        # Check if part_hash column exists (migration for existing DBs)
-        cursor = self.conn.execute("PRAGMA table_info(copies)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if 'part_hash' not in columns:
-            self.conn.execute("ALTER TABLE copies ADD COLUMN part_hash TEXT")
-        
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_size_hash ON copies(size, part_hash)")
-        self.conn.commit()
+        with self.lock:
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS copies (
+                    source_path TEXT PRIMARY KEY,
+                    dest_path TEXT,
+                    status TEXT,
+                    size INTEGER,
+                    mtime REAL,
+                    part_hash TEXT
+                )
+            ''')
+            # Check if part_hash column exists (migration for existing DBs)
+            cursor = self.conn.execute("PRAGMA table_info(copies)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if 'part_hash' not in columns:
+                self.conn.execute("ALTER TABLE copies ADD COLUMN part_hash TEXT")
+            
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_size_hash ON copies(size, part_hash)")
+            self.conn.commit()
 
     def start_caffeinate(self):
         """Prevents macOS from sleeping during long HDD transfers."""
@@ -48,20 +51,22 @@ class FileEngine:
 
     def is_already_copied(self, source_path: str) -> bool:
         """Check if file was already successfully copied in a previous run."""
-        cursor = self.conn.execute('SELECT status FROM copies WHERE source_path = ?', (source_path,))
-        row = cursor.fetchone()
-        return row is not None and row[0] == 'completed'
+        with self.lock:
+            cursor = self.conn.execute('SELECT status FROM copies WHERE source_path = ?', (source_path,))
+            row = cursor.fetchone()
+            return row is not None and row[0] == 'completed'
 
     def record_copy(self, source_path: str, dest_path: str, size: int, mtime: float, part_hash: str = ""):
         """Atomic write to checkpoint DB with size and hash indexing."""
         if not part_hash and dest_path != "DUPLICATE_SKIPPED" and os.path.exists(dest_path):
             part_hash = self._get_part_hash(dest_path, size)
         
-        self.conn.execute('''
-            INSERT OR REPLACE INTO copies (source_path, dest_path, status, size, mtime, part_hash)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (source_path, dest_path, 'completed', size, mtime, part_hash))
-        self.conn.commit()
+        with self.lock:
+            self.conn.execute('''
+                INSERT OR REPLACE INTO copies (source_path, dest_path, status, size, mtime, part_hash)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (source_path, dest_path, 'completed', size, mtime, part_hash))
+            self.conn.commit()
 
     def set_finder_tag(self, filepath: str, color_num: str, tag_name: str):
         """Applies a native macOS Finder tag to a file."""
@@ -96,9 +101,9 @@ class FileEngine:
         Returns (is_dup, part_hash).
         """
         src_hash = ""
-        # Check DB if any copied file has the exact same size
-        cursor = self.conn.execute('SELECT dest_path, part_hash FROM copies WHERE size = ? AND status = "completed" AND dest_path != "DUPLICATE_SKIPPED"', (size,))
-        rows = cursor.fetchall()
+        with self.lock:
+            cursor = self.conn.execute('SELECT dest_path, part_hash FROM copies WHERE size = ? AND status = "completed" AND dest_path != "DUPLICATE_SKIPPED"', (size,))
+            rows = cursor.fetchall()
         if not rows:
             return False, ""
 

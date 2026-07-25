@@ -108,18 +108,22 @@ class OrganizerAPI:
                 if not os.path.exists(dest_proj):
                     shutil.copytree(proj, dest_proj, dirs_exist_ok=True)
                     
-            # Files
+            # Files - Multi-Threaded Parallel Execution (8 Workers)
             total_files = len(scanner.files_to_process)
-            for i, file_path in enumerate(scanner.files_to_process):
+            completed_counter = [0]
+            counter_lock = threading.Lock()
+
+            def process_single_file(file_path):
                 filename = os.path.basename(file_path)
                 
-                # Update progress
-                if i % 5 == 0 or i == total_files - 1:
-                    self.progress_cb(i, total_files, f"Organizing: {filename}")
-                
                 if engine.is_already_copied(file_path):
-                    continue
-                    
+                    with counter_lock:
+                        completed_counter[0] += 1
+                        idx = completed_counter[0]
+                        if idx % 10 == 0 or idx == total_files:
+                            self.progress_cb(idx, total_files, f"Skipped (Already copied): {filename}")
+                    return
+
                 category = categorizer.get_file_category(filename)
                 
                 if category == "Media":
@@ -151,17 +155,30 @@ class OrganizerAPI:
                     size = os.path.getsize(file_path)
                     mtime = os.path.getmtime(file_path)
                 except OSError:
-                    continue
+                    return
                     
                 final_dest, part_hash = engine.resolve_destination(target_base, filename, size, file_path)
                 if final_dest is None:
                     engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime, part_hash)
-                    continue
-                    
-                engine.copy_file(file_path, final_dest)
-                if "Unsorted" in rel_dest:
-                    engine.set_finder_tag(final_dest, "5", "To Review")
-                engine.record_copy(file_path, final_dest, size, mtime, part_hash)
+                else:
+                    engine.copy_file(file_path, final_dest)
+                    if "Unsorted" in rel_dest:
+                        engine.set_finder_tag(final_dest, "5", "To Review")
+                    engine.record_copy(file_path, final_dest, size, mtime, part_hash)
+
+                with counter_lock:
+                    completed_counter[0] += 1
+                    idx = completed_counter[0]
+                    if idx % 5 == 0 or idx == total_files:
+                        self.progress_cb(idx, total_files, f"Organized ({idx}/{total_files}): {filename}")
+
+            import threading
+            from concurrent.futures import ThreadPoolExecutor
+            max_workers = min(16, max(4, os.cpu_count() or 4))
+            self.log_cb(f"Using {max_workers} parallel worker threads for fast transfer.")
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                list(executor.map(process_single_file, scanner.files_to_process))
                 
             self.progress_cb(total_files, total_files, "Complete")
             self.log_cb("All done! 100% of files organized safely.")
