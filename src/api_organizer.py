@@ -140,33 +140,36 @@ class OrganizerAPI:
         engine = FileEngine(dest_abs)
         dates = DateExtractor(categorizer)
         engine.start_caffeinate()
-        
-        # Pre-pass: Index HEIC dates for Live Photos
-        live_photo_dates: Dict[Tuple[str, str], Tuple[str, str]] = {}
-        for fp in scanner.files_to_process:
-            if fp.rsplit('.', 1)[-1].lower() == 'heic':
-                y, m = dates.extract_date(fp)
-                if y and m:
-                    dir_name, fn = os.path.split(fp)
-                    name_only = fn.rsplit('.', 1)[0]
-                    live_photo_dates[(dir_name, name_only)] = (y, m)
-        
+
         try:
-            # Code Projects
+            # Pre-pass: Index HEIC dates for Live Photos
+            live_photo_dates: Dict[Tuple[str, str], Tuple[str, str]] = {}
+            for fp in scanner.files_to_process:
+                if fp.rsplit('.', 1)[-1].lower() == 'heic':
+                    y, m = dates.extract_date(fp)
+                    if y and m:
+                        dir_name, fn = os.path.split(fp)
+                        name_only = fn.rsplit('.', 1)[0]
+                        live_photo_dates[(dir_name, name_only)] = (y, m)
+
+            # Total items count for continuous progress calculation
             total_projects = len(scanner.projects_found)
+            total_files = len(scanner.files_to_process)
+            total_items = total_projects + total_files
+
+            # 1. Code Projects
             for i, proj in enumerate(scanner.projects_found):
                 if self.cancelled:
                     self.log_cb("Operation cancelled by user. Progress saved.")
                     return False
                 proj_name = os.path.basename(proj)
                 dest_proj = os.path.join(dest_abs, "Code", proj_name)
-                self.progress_cb(i, total_projects, f"Copying project: {proj_name}")
+                self.progress_cb(i + 1, total_items, f"Copying project: {proj_name}")
                 if not os.path.exists(dest_proj):
                     shutil.copytree(proj, dest_proj, dirs_exist_ok=True)
                     
-            # Files - Multi-Threaded Parallel Execution (8 Workers)
+            # 2. Files - Multi-Threaded Parallel Execution (4 Workers)
             import time
-            total_files = len(scanner.files_to_process)
             completed_counter = [0]
             counter_lock = threading.Lock()
             start_time = time.time()
@@ -176,13 +179,12 @@ class OrganizerAPI:
                     return
                 filename = os.path.basename(file_path)
 
-                
                 if engine.is_already_copied(file_path):
                     with counter_lock:
                         completed_counter[0] += 1
-                        idx = completed_counter[0]
-                        if idx % 10 == 0 or idx == total_files:
-                            self.progress_cb(idx, total_files, f"Skipped (Already copied): {filename}")
+                        idx = total_projects + completed_counter[0]
+                        if completed_counter[0] % 10 == 0 or completed_counter[0] == total_files:
+                            self.progress_cb(idx, total_items, f"Skipped (Already copied): {filename}")
                     return
 
                 category = categorizer.get_file_category(filename)
@@ -229,12 +231,12 @@ class OrganizerAPI:
 
                 with counter_lock:
                     completed_counter[0] += 1
-                    idx = completed_counter[0]
+                    idx = total_projects + completed_counter[0]
                     elapsed = time.time() - start_time
                     eta_str = ""
-                    if elapsed > 0.5 and idx > 0:
-                        rate = idx / elapsed
-                        rem_files = total_files - idx
+                    if elapsed > 0.5 and completed_counter[0] > 0:
+                        rate = completed_counter[0] / elapsed
+                        rem_files = total_files - completed_counter[0]
                         rem_seconds = int(rem_files / rate)
                         if rem_seconds >= 3600:
                             h = rem_seconds // 3600
@@ -247,8 +249,8 @@ class OrganizerAPI:
                         else:
                             eta_str = f"⏳ ~{rem_seconds}s remaining"
 
-                    if idx % 5 == 0 or idx == total_files:
-                        self.progress_cb(idx, total_files, f"Organizing: {filename}", eta_str)
+                    if completed_counter[0] % 5 == 0 or completed_counter[0] == total_files:
+                        self.progress_cb(idx, total_items, f"Organizing: {filename}", eta_str)
 
             max_workers = 4
             self.log_cb(f"Using {max_workers} safe parallel worker threads for fast transfer.")
@@ -256,7 +258,7 @@ class OrganizerAPI:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 list(executor.map(process_single_file, scanner.files_to_process))
                 
-            self.progress_cb(total_files, total_files, "Complete")
+            self.progress_cb(total_items, total_items, "Complete")
             self.log_cb("All done! 100% of files organized safely.")
 
             # Record history
@@ -287,12 +289,12 @@ class OrganizerAPI:
                 pass
             return True
 
-            
         except Exception as e:
             self.log_cb(f"Error occurred: {str(e)}")
             return False
         finally:
             engine.close()
+
 
     def list_code_projects(self, dest_abs: str):
         """Returns a list of project folders inside dest_abs/Code/."""

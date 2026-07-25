@@ -30,7 +30,7 @@ state = UIState()
 def reset_state():
     state.status = "idle"
     state.progress = 0
-    state.total = 100
+    state.total = 0
     state.message = "Ready"
     state.eta = ""
     state.logs = []
@@ -39,7 +39,10 @@ def reset_state():
 def log_cb(msg: str):
     print(msg)
     state.logs.append(msg)
+    if len(state.logs) > 2000:
+        state.logs = state.logs[-2000:]
     state.message = msg
+
 
 def progress_cb(current: int, total: int, msg: str, eta: str = ""):
     state.progress = current

@@ -468,14 +468,21 @@ function toggleExcludeCurrentProject() {
 }
 
 async function executeFullCopy() {
+    const goBtn = document.getElementById('confirm-go-btn');
+    if (goBtn) goBtn.disabled = true;
     lastWasPreview = false;
     document.getElementById('preview-mode').checked = false;
     document.getElementById('confirm-box').classList.add('hidden');
     document.getElementById('default-actions').style.display = "block";
     const heading = document.getElementById('status-heading');
     if (heading) heading.innerText = "🔍 Scanning Files...";
-    await startOrganizing();
+    try {
+        await startOrganizing();
+    } finally {
+        if (goBtn) goBtn.disabled = false;
+    }
 }
+
 
 
 function resetToSetup() {
