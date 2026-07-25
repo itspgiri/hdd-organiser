@@ -320,39 +320,46 @@ class OrganizerAPI:
         return [{"source_path": r[0], "size": r[1]} for r in rows]
 
     def trash_duplicates(self, source_paths: list):
-        """Safely moves duplicate source files to macOS Trash via a single batched osascript command."""
-        import subprocess
+        """
+        Safely moves duplicate source files to a '.Duplicates_Trash' folder on the source drive.
+        Bypasses Finder AppleScript popups and Touch ID prompts completely (100% automated & zero-prompt).
+        """
         valid_paths = [p for p in source_paths if os.path.exists(p)]
         if not valid_paths:
             return 0
 
-        # Batch paths in chunks of 50 to prevent repeated Touch ID / authorization prompts
-        chunk_size = 50
         trashed_count = 0
+        for file_path in valid_paths:
+            try:
+                parent_dir = os.path.dirname(file_path)
+                trash_dir = os.path.join(parent_dir, ".Duplicates_Trash")
+                os.makedirs(trash_dir, exist_ok=True)
+                
+                filename = os.path.basename(file_path)
+                target_path = os.path.join(trash_dir, filename)
+                
+                # Handle filename collisions in trash folder
+                counter = 1
+                name, ext = os.path.splitext(filename)
+                while os.path.exists(target_path):
+                    target_path = os.path.join(trash_dir, f"{name}_{counter}{ext}")
+                    counter += 1
 
-        for i in range(0, len(valid_paths), chunk_size):
-            chunk = valid_paths[i:i + chunk_size]
-            formatted_items = []
-            for p in chunk:
-                escaped_p = p.replace('\\', '\\\\').replace('"', '\\"')
-                formatted_items.append(f'POSIX file "{escaped_p}"')
-            items_str = ", ".join(formatted_items)
-            script = f'tell application "Finder" to delete {{{items_str}}}'
-            res = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
-
-            if res.returncode == 0:
-                trashed_count += len(chunk)
-            else:
-                # Fallback to individual if batch fails
-                for path in chunk:
-                    if os.path.exists(path):
-                        escaped_path = path.replace('\\', '\\\\').replace('"', '\\"')
-                        sub_script = f'tell application "Finder" to delete POSIX file "{escaped_path}"'
-                        sub_res = subprocess.run(['osascript', '-e', sub_script], capture_output=True, text=True)
-                        if sub_res.returncode == 0:
-                            trashed_count += 1
+                shutil.move(file_path, target_path)
+                trashed_count += 1
+            except Exception:
+                # Fallback to AppleScript if direct filesystem move fails
+                try:
+                    escaped_path = file_path.replace('\\', '\\\\').replace('"', '\\"')
+                    script = f'tell application "Finder" to delete POSIX file "{escaped_path}"'
+                    res = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+                    if res.returncode == 0:
+                        trashed_count += 1
+                except Exception:
+                    pass
 
         return trashed_count
+
 
 
     def verify_transfer(self, dest_abs: str) -> dict:

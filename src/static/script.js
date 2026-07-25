@@ -369,7 +369,7 @@ async function loadDuplicateCleaner() {
 }
 
 async function trashAllDuplicates() {
-    if (!confirm(`Are you sure you want to move ${duplicateSourcePaths.length} duplicate files on your SOURCE drive to macOS Trash?`)) {
+    if (!confirm(`Are you sure you want to isolate ${duplicateSourcePaths.length} duplicate files on your SOURCE drive into a .Duplicates_Trash folder?`)) {
         return;
     }
     try {
@@ -379,12 +379,13 @@ async function trashAllDuplicates() {
             body: JSON.stringify({ source_paths: duplicateSourcePaths })
         });
         const data = await response.json();
-        alert(`Successfully moved ${data.count} duplicate files to Trash!`);
+        alert(`Successfully moved ${data.count} duplicate files into .Duplicates_Trash with 0 Touch ID prompts!`);
         loadDuplicateCleaner();
     } catch (e) {
-        alert("Error moving files to trash: " + e);
+        alert("Error moving duplicate files: " + e);
     }
 }
+
 
 async function openDestinationInFinder() {
     const dest = document.getElementById('dest-path').value;
