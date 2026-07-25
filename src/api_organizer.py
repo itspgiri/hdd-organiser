@@ -88,10 +88,13 @@ class OrganizerAPI:
             "ignored_garbage": scanner.ignored_garbage_count,
             "garbage_breakdown": scanner.garbage_breakdown,
             "garbage_samples": scanner.garbage_samples,
+            "gdrive_zips_extracted": scanner.gdrive_zips_extracted,
+            "gdrive_zip_names": scanner.gdrive_zip_names,
             "free_space": free_space_str,
             "categories": category_counts,
             "category_samples": category_samples
         }
+
 
 
         

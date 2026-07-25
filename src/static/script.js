@@ -229,10 +229,20 @@ function renderPreviewDashboard(summary) {
         projsHtml += `</div></div>`;
     }
 
+    let gdriveHtml = "";
+    if (summary.gdrive_zips_extracted && summary.gdrive_zips_extracted > 0) {
+        const namesList = summary.gdrive_zip_names ? summary.gdrive_zip_names.join(', ') : '';
+        gdriveHtml = `
+        <div style="font-size: 11px; margin-top: 8px; padding: 6px 10px; background: rgba(10, 132, 255, 0.1); border-radius: 6px; border: 1px solid var(--primary-color);">
+            📦 <strong>Auto-Unzipped ${summary.gdrive_zips_extracted} Google Drive Archive(s):</strong> ${namesList}
+            <div style="opacity: 0.85; font-size: 10px; margin-top: 2px;">✓ All inner photos, videos, documents & files extracted & sorted into destination categories!</div>
+        </div>`;
+    }
+
     let garbageHtml = "";
     if (summary.ignored_garbage && summary.ignored_garbage > 0) {
         garbageHtml = `
-        <div style="font-size: 11px; margin-top: 10px; padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--border-color);">
+        <div style="font-size: 11px; margin-top: 8px; padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--border-color);">
             <span>🛡️ Safely Ignored <strong>${summary.ignored_garbage.toLocaleString()}</strong> System/Garbage Files</span>
             <button class="btn secondary" style="font-size: 10px; padding: 2px 8px;" onclick="inspectGarbageFiles()">
                 🔍 View Breakdown Report
@@ -255,6 +265,7 @@ function renderPreviewDashboard(summary) {
                 <div class="stat-lbl">Free HDD Space</div>
             </div>
         </div>
+        ${gdriveHtml}
         <div style="font-size: 11px; font-weight: bold; margin-top: 8px; margin-bottom: 4px;">📊 File Categories (Click any category to preview files):</div>
         <div class="category-pills">
             ${catsHtml}
@@ -266,6 +277,7 @@ function renderPreviewDashboard(summary) {
         </div>
     `;
 }
+
 
 function inspectCategoryFiles(category) {
     const modal = document.getElementById('category-modal');
