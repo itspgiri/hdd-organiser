@@ -12,6 +12,8 @@ class FileEngine:
         self.dest_root = dest_root
         self.db_path = os.path.join(dest_root, ".organizer_checkpoint.db")
         self.lock = threading.Lock()
+        self.dirs_lock = threading.Lock()
+        self.created_dirs = set()
         self._uncommitted = 0
         self._init_db()
         self.caffeinate_process = None
@@ -22,6 +24,8 @@ class FileEngine:
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self.conn.execute('PRAGMA synchronous = NORMAL;')
             self.conn.execute('PRAGMA journal_mode = WAL;')
+            self.conn.execute('PRAGMA cache_size = -64000;') # 64MB RAM index cache
+            self.conn.execute('PRAGMA temp_store = MEMORY;')
             self.conn.execute('''
                 CREATE TABLE IF NOT EXISTS copies (
                     source_path TEXT PRIMARY KEY,
@@ -40,6 +44,14 @@ class FileEngine:
             
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_size_hash ON copies(size, part_hash)")
             self.conn.commit()
+
+    def ensure_dir(self, dir_path: str):
+        """Fast path directory creation: avoids repeated syscalls if directory was already created."""
+        if dir_path not in self.created_dirs:
+            with self.dirs_lock:
+                if dir_path not in self.created_dirs:
+                    os.makedirs(dir_path, exist_ok=True)
+                    self.created_dirs.add(dir_path)
 
     def start_caffeinate(self):
         """Prevents macOS from sleeping during long HDD transfers."""
@@ -139,7 +151,7 @@ class FileEngine:
         if is_dup:
             return None, src_hash
 
-        os.makedirs(os.path.dirname(base_dest), exist_ok=True)
+        self.ensure_dir(os.path.dirname(base_dest))
         
         if not os.path.exists(base_dest):
             return base_dest, src_hash
