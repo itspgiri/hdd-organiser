@@ -421,8 +421,18 @@ input[type="text"]:focus {
     background: rgba(52, 199, 89, 0.12);
     border: 1px solid rgba(52, 199, 89, 0.4);
     border-radius: 10px;
-    padding: 16px;
+    padding: 14px;
 }
+
+.sticky-actions {
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-color);
+    padding: 10px 0;
+    border-top: 1px solid var(--border-color);
+    z-index: 100;
+}
+
 
 .confirm-box.hidden {
     display: none;

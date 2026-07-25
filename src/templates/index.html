@@ -148,20 +148,21 @@
             </div>
             <p id="current-message" class="current-message">Initializing...</p>
             
+            <div id="confirm-box" class="confirm-box hidden" style="margin-top: 10px; margin-bottom: 15px;">
+                <div class="confirm-title">📊 Dry-Run Scan Results Summary</div>
+                <div id="preview-dashboard" class="preview-dashboard" style="margin-top: 10px;"></div>
+                <div class="actions sticky-actions" style="margin-top: 15px; display: flex; gap: 10px;">
+                    <button class="btn secondary" onclick="showView('setup-view')" style="flex: 1;">◄ Back to Setup</button>
+                    <button class="btn success-btn" id="confirm-go-btn" onclick="executeFullCopy()" style="flex: 2;">🚀 YES, Execute Full Transfer!</button>
+                </div>
+            </div>
+
             <input type="text" id="log-filter" placeholder="🔍 Filter live activity logs..." onkeyup="filterLogs()" style="font-size: 12px; padding: 6px 12px; margin-bottom: 8px; width: 100%; border-radius: 6px;">
 
-            <div class="log-container" id="log-container">
+            <div class="log-container" id="log-container" style="max-height: 120px; overflow-y: auto;">
                 <div class="log-content" id="log-content"></div>
             </div>
 
-            <div id="confirm-box" class="confirm-box hidden" style="margin-top: 15px;">
-                <div class="confirm-title">📊 Dry-Run Scan Results Summary</div>
-                <div id="preview-dashboard" class="preview-dashboard" style="margin-top: 10px;"></div>
-                <div class="actions" style="margin-top: 15px;">
-                    <button class="btn secondary" onclick="showView('setup-view')" style="width: 30%;">◄ Back to Setup</button>
-                    <button class="btn success-btn" id="confirm-go-btn" onclick="executeFullCopy()" style="width: 65%; float: right;">🚀 YES, Execute Full Transfer!</button>
-                </div>
-            </div>
 
             <!-- INSPECT CODE PROJECT MODAL -->
             <div id="inspect-modal" class="inspect-modal hidden" style="margin-top: 15px;">
