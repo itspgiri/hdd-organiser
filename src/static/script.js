@@ -2,6 +2,54 @@ let currentDestMode = 'new';
 let excludedProjects = [];
 let currentInspectedPath = "";
 let viewHistory = ['guide-view'];
+let pollInterval = null;
+let lastWasPreview = false;
+let lastPreviewSummary = null;
+let allLogs = [];
+
+function startPolling() {
+    if (pollInterval) clearInterval(pollInterval);
+
+    pollInterval = setInterval(async () => {
+        try {
+            const res = await fetch('/api/status');
+            const data = await res.json();
+
+            updateProgressUI(data);
+
+            if (data.status === 'complete' || data.status === 'error') {
+                clearInterval(pollInterval);
+                pollInterval = null;
+
+                const heading = document.getElementById('status-heading');
+                const doneBtn = document.getElementById('done-btn');
+                const startBtn = document.getElementById('start-btn');
+                if (startBtn) {
+                    startBtn.disabled = false;
+                    startBtn.innerText = "Start Organizing";
+                }
+                if (doneBtn) doneBtn.disabled = false;
+
+                if (data.status === 'complete') {
+                    if (heading) heading.innerText = lastWasPreview ? "Preview Complete!" : "Organization Complete!";
+
+                    if (lastWasPreview) {
+                        lastPreviewSummary = data.preview_summary;
+                        document.getElementById('confirm-box').classList.remove('hidden');
+                        renderPreviewDashboard(data.preview_summary);
+                    } else {
+                        document.getElementById('review-panel').classList.remove('hidden');
+                    }
+                    try { loadHistoryView(false); } catch (e) {}
+                } else if (data.status === 'error') {
+                    if (heading) heading.innerText = "Error Occurred";
+                }
+            }
+        } catch (e) {
+            console.error("Error polling status", e);
+        }
+    }, 500);
+}
 
 function selectDestMode(mode) {
     currentDestMode = mode;
@@ -11,6 +59,7 @@ function selectDestMode(mode) {
     const radio = document.querySelector(`input[name="dest-mode"][value="${mode}"]`);
     if (radio) radio.checked = true;
 }
+
 
 function showView(viewId) {
     if (viewHistory[viewHistory.length - 1] !== viewId) {
@@ -461,10 +510,12 @@ async function runVerificationChecker() {
     }
 }
 
-async function loadHistoryView() {
-    showView('history-view');
+async function loadHistoryView(shouldNavigate = true) {
+    if (shouldNavigate) showView('history-view');
     const container = document.getElementById('history-list-container');
-    container.innerHTML = "<div>Loading past runs...</div>";
+    if (!container) return;
+    if (shouldNavigate) container.innerHTML = "<div>Loading past runs...</div>";
+
 
     try {
         const response = await fetch('/api/history');

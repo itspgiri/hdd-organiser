@@ -247,18 +247,23 @@ def verify_transfer():
 def get_history():
     from .utils import load_run_history
     history_file = os.path.join(base_dir, "run_history.json")
+    if not os.path.exists(history_file):
+        parent_file = os.path.join(os.path.dirname(base_dir), "run_history.json")
+        if os.path.exists(parent_file):
+            history_file = parent_file
     runs = load_run_history(history_file)
     return jsonify({"history": runs})
 
 @app.route("/api/clear_history", methods=["POST"])
 def clear_history():
-    history_file = os.path.join(base_dir, "run_history.json")
-    if os.path.exists(history_file):
-        try:
-            os.remove(history_file)
-        except Exception:
-            pass
+    for h_file in [os.path.join(base_dir, "run_history.json"), os.path.join(os.path.dirname(base_dir), "run_history.json")]:
+        if os.path.exists(h_file):
+            try:
+                os.remove(h_file)
+            except Exception:
+                pass
     return jsonify({"success": True})
+
 
 
 def run_organizer(source, dest, is_preview=False, dest_mode="new", excluded_projects=None):

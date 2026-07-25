@@ -82,7 +82,31 @@ class OrganizerAPI:
         if is_preview:
             self.progress_cb(100, 100, "Preview Complete")
             self.log_cb("Preview Complete! No files were moved or altered.")
+
+            # Save preview history
+            try:
+                from datetime import datetime
+                from .utils import save_run_to_history
+                history_file = os.path.join(os.path.dirname(self.config_path), "run_history.json")
+                timestamp_str = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+                run_record = {
+                    "id": f"run_{int(time.time())}",
+                    "timestamp": timestamp_str,
+                    "source": source_abs,
+                    "dest": dest_abs,
+                    "is_preview": True,
+                    "dest_mode": dest_mode,
+                    "total_files": len(scanner.files_to_process),
+                    "total_size": size_str,
+                    "projects_count": len(scanner.projects_found),
+                    "status": "Preview"
+                }
+                save_run_to_history(history_file, run_record)
+            except Exception:
+                pass
+
             return True
+
 
         # Execution
         os.makedirs(dest_abs, exist_ok=True)
