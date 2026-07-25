@@ -31,11 +31,14 @@ class OrganizerAPI:
         scanner.scan_directory(source_abs)
         
         total_bytes = 0
+        category_counts: Dict[str, int] = {}
         for fp in scanner.files_to_process:
             try:
                 total_bytes += os.path.getsize(fp)
             except OSError:
                 pass
+            cat = categorizer.get_file_category(os.path.basename(fp))
+            category_counts[cat] = category_counts.get(cat, 0) + 1
 
         from .utils import format_size
         size_str = format_size(total_bytes)
@@ -44,12 +47,24 @@ class OrganizerAPI:
         if scanner.ignored_garbage_count > 0:
             self.log_cb(f"Safely ignored {scanner.ignored_garbage_count} system/garbage files.")
 
+        free_space_str = "Unknown"
         try:
             dest_parent = dest_abs if os.path.exists(dest_abs) else os.path.dirname(dest_abs)
             free_bytes = shutil.disk_usage(dest_parent).free
-            self.log_cb(f"Destination Drive Free Space: {format_size(free_bytes)}")
+            free_space_str = format_size(free_bytes)
+            self.log_cb(f"Destination Drive Free Space: {free_space_str}")
         except Exception:
             pass
+
+        self.last_preview_summary = {
+            "total_files": len(scanner.files_to_process),
+            "total_size": size_str,
+            "total_projects": len(scanner.projects_found),
+            "projects": [os.path.basename(p) for p in scanner.projects_found[:10]], # top 10
+            "ignored_garbage": scanner.ignored_garbage_count,
+            "free_space": free_space_str,
+            "categories": category_counts
+        }
         
         if len(scanner.files_to_process) == 0 and len(scanner.projects_found) == 0:
             self.log_cb("Warning: No files found to move!")
@@ -58,7 +73,6 @@ class OrganizerAPI:
         if is_preview:
             self.progress_cb(100, 100, "Preview Complete")
             self.log_cb("Preview Complete! No files were moved or altered.")
-            self.log_cb("Uncheck 'Dry Run / Preview' when ready to perform the actual copy.")
             return True
 
         # Execution

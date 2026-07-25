@@ -93,7 +93,7 @@ function startPolling() {
             
             if (data.status === 'complete' || data.status === 'error') {
                 clearInterval(pollInterval);
-                finishOrganizing(data.status);
+                finishOrganizing(data.status, data);
             }
         } catch (e) {
             console.error("Polling error", e);
@@ -123,10 +123,9 @@ function updateProgressUI(data) {
     logContainer.scrollTop = logContainer.scrollHeight;
 }
 
-let pollInterval = null;
-let lastWasPreview = false;
+let lastPreviewSummary = {};
 
-function finishOrganizing(status) {
+function finishOrganizing(status, data) {
     const heading = document.getElementById('status-heading');
     const btn = document.getElementById('done-btn');
     const confirmBox = document.getElementById('confirm-box');
@@ -135,8 +134,11 @@ function finishOrganizing(status) {
     
     if (status === 'complete') {
         if (lastWasPreview) {
-            heading.innerText = "Preview Complete!";
+            heading.innerText = "Dry-Run Scan Complete!";
             heading.style.color = "var(--primary-color)";
+            if (data && data.preview_summary) {
+                renderPreviewDashboard(data.preview_summary);
+            }
             confirmBox.classList.remove('hidden');
             reviewPanel.classList.add('hidden');
             defaultActions.style.display = "none";
@@ -157,6 +159,50 @@ function finishOrganizing(status) {
     
     btn.disabled = false;
     document.getElementById('progress-fill').style.width = "100%";
+}
+
+function renderPreviewDashboard(summary) {
+    const dash = document.getElementById('preview-dashboard');
+    if (!summary || !summary.total_files) {
+        dash.innerHTML = "<p class='confirm-desc'>Preview Complete! Ready to transfer files.</p>";
+        return;
+    }
+    
+    let catsHtml = "";
+    if (summary.categories) {
+        for (const [cat, count] of Object.entries(summary.categories)) {
+            catsHtml += `<span class="category-pill">${cat}: <strong>${count}</strong></span>`;
+        }
+    }
+
+    let projsHtml = "";
+    if (summary.projects && summary.projects.length > 0) {
+        projsHtml = `<div style="font-size: 11px; margin-top: 8px;"><strong>Intact Code Projects Detected (${summary.total_projects}):</strong> ${summary.projects.join(', ')}</div>`;
+    }
+
+    dash.innerHTML = `
+        <div class="stat-grid">
+            <div class="stat-card">
+                <div class="stat-val">${summary.total_files}</div>
+                <div class="stat-lbl">Files Found</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-val">${summary.total_size}</div>
+                <div class="stat-lbl">Total Size</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-val">${summary.free_space}</div>
+                <div class="stat-lbl">Free HDD Space</div>
+            </div>
+        </div>
+        <div class="category-pills">
+            ${catsHtml}
+        </div>
+        ${projsHtml}
+        <div style="font-size: 11px; opacity: 0.7; margin-top: 8px; color: var(--success-color);">
+            ✓ <strong>Safe Read-Only Preview:</strong> 0 files moved. Ready to organize.
+        </div>
+    `;
 }
 
 async function executeFullCopy() {

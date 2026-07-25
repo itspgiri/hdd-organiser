@@ -349,6 +349,49 @@ input[type="text"]:focus {
     opacity: 0.8;
 }
 
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin: 10px 0;
+}
+
+.stat-card {
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px 10px;
+    text-align: center;
+}
+
+.stat-val {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--primary-color);
+}
+
+.stat-lbl {
+    font-size: 10px;
+    opacity: 0.7;
+    margin-top: 2px;
+}
+
+.category-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.category-pill {
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
 .btn.success-btn {
     background-color: #34c759;
     color: white;

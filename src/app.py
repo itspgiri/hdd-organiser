@@ -22,6 +22,7 @@ class UIState:
     total = 100
     message = "Waiting to start..."
     logs = []
+    preview_summary = {}
 
 state = UIState()
 
@@ -31,6 +32,7 @@ def reset_state():
     state.total = 100
     state.message = "Ready"
     state.logs = []
+    state.preview_summary = {}
 
 def log_cb(msg: str):
     print(msg)
@@ -94,7 +96,8 @@ def get_status():
         "progress": state.progress,
         "total": state.total,
         "message": state.message,
-        "logs": state.logs
+        "logs": state.logs,
+        "preview_summary": state.preview_summary
     })
 
 @app.route("/api/projects", methods=["GET"])
@@ -178,6 +181,8 @@ def run_organizer(source, dest, is_preview=False, dest_mode="new"):
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
     success = api.run(source, dest, is_preview=is_preview, dest_mode=dest_mode)
+    if hasattr(api, 'last_preview_summary'):
+        state.preview_summary = api.last_preview_summary
     if success:
         state.status = "complete"
     else:
