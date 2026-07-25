@@ -171,6 +171,21 @@
                 </div>
             </div>
 
+            <!-- INSPECT GARBAGE FILES MODAL -->
+            <div id="garbage-modal" class="inspect-modal hidden" style="margin-top: 15px;">
+                <div class="inspect-header">
+                    <strong>🗑️ Ignored System & Garbage Files Audit Report</strong>
+                    <button class="btn secondary" style="font-size: 11px; padding: 2px 8px; float: right;" onclick="closeGarbageModal()">✕ Close</button>
+                </div>
+                <div style="font-size: 11px; opacity: 0.85; margin-top: 8px; margin-bottom: 10px; background: rgba(255,255,255,0.05); padding: 8px; border-radius: 6px;">
+                    💡 <strong>Why so many?</strong> When files are copied to an external drive (exFAT/FAT32/NTFS), macOS automatically creates a hidden <code>._filename</code> AppleDouble metadata file for <em>every single image & video</em>. Drive Organizer safely ignores these <code>._*</code> sidecars so your destination drive stays 100% clean.
+                </div>
+                <div id="garbage-breakdown-list" style="font-size: 12px; margin-bottom: 10px;"></div>
+                <div style="font-size: 11px; font-weight: bold; margin-bottom: 4px;">Sample Paths of Ignored System Files:</div>
+                <div id="garbage-samples-list" class="inspect-files-list" style="max-height: 120px;"></div>
+            </div>
+
+
             <!-- POST-TRANSFER REVIEW TOOLS -->
             <div id="review-panel" class="review-panel hidden" style="margin-top: 20px;">
                 <h3>🛠️ Post-Organization Review & Tools</h3>

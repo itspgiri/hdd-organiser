@@ -202,6 +202,17 @@ function renderPreviewDashboard(summary) {
         projsHtml += `</div>`;
     }
 
+    let garbageHtml = "";
+    if (summary.ignored_garbage && summary.ignored_garbage > 0) {
+        garbageHtml = `
+        <div style="font-size: 11px; margin-top: 10px; padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; display: flex; justify-content: space-between; align-items: center;">
+            <span>🛡️ Safely Ignored <strong>${summary.ignored_garbage.toLocaleString()}</strong> System/Garbage Files</span>
+            <button class="btn secondary" style="font-size: 10px; padding: 2px 8px;" onclick="inspectGarbageFiles()">
+                🔍 View Breakdown Report
+            </button>
+        </div>`;
+    }
+
     dash.innerHTML = `
         <div class="stat-grid">
             <div class="stat-card">
@@ -221,11 +232,43 @@ function renderPreviewDashboard(summary) {
             ${catsHtml}
         </div>
         ${projsHtml}
+        ${garbageHtml}
         <div style="font-size: 11px; opacity: 0.7; margin-top: 8px; color: var(--success-color);">
             ✓ <strong>Safe Read-Only Preview:</strong> 0 files moved. Ready to organize.
         </div>
     `;
 }
+
+function inspectGarbageFiles() {
+    const modal = document.getElementById('garbage-modal');
+    const bList = document.getElementById('garbage-breakdown-list');
+    const sList = document.getElementById('garbage-samples-list');
+
+    if (!lastPreviewSummary) return;
+
+    let bHtml = "<strong>System Garbage Breakdown:</strong><br>";
+    if (lastPreviewSummary.garbage_breakdown) {
+        for (const [gType, gCount] of Object.entries(lastPreviewSummary.garbage_breakdown)) {
+            bHtml += `<div style="padding: 2px 0;">• <strong>${gType}:</strong> ${gCount.toLocaleString()} files</div>`;
+        }
+    }
+    bList.innerHTML = bHtml;
+
+    let sHtml = "";
+    if (lastPreviewSummary.garbage_samples && lastPreviewSummary.garbage_samples.length > 0) {
+        sHtml = lastPreviewSummary.garbage_samples.map(p => `<div>📄 ${p}</div>`).join('');
+    } else {
+        sHtml = "<div>No sample paths available.</div>";
+    }
+    sList.innerHTML = sHtml;
+
+    modal.classList.remove('hidden');
+}
+
+function closeGarbageModal() {
+    document.getElementById('garbage-modal').classList.add('hidden');
+}
+
 
 function updateProgressUI(data) {
     const fill = document.getElementById('progress-fill');

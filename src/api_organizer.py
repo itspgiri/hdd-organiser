@@ -71,9 +71,12 @@ class OrganizerAPI:
             "projects": [os.path.basename(p) for p in scanner.projects_found[:10]],
             "project_details": project_details,
             "ignored_garbage": scanner.ignored_garbage_count,
+            "garbage_breakdown": scanner.garbage_breakdown,
+            "garbage_samples": scanner.garbage_samples,
             "free_space": free_space_str,
             "categories": category_counts
         }
+
         
         if len(scanner.files_to_process) == 0 and len(scanner.projects_found) == 0:
             self.log_cb("Warning: No files found to move!")

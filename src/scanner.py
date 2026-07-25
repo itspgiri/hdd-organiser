@@ -22,6 +22,8 @@ class Scanner:
         self.projects_found: List[str] = []
         self.files_to_process: List[str] = []
         self.ignored_garbage_count = 0
+        self.garbage_breakdown: Dict[str, int] = {}
+        self.garbage_samples: List[str] = []
 
     def is_garbage(self, filename: str) -> bool:
         if filename in GARBAGE_FILES:
@@ -29,6 +31,17 @@ class Scanner:
         if filename.startswith(GARBAGE_PREFIXES):
             return True
         return False
+
+    def classify_garbage(self, filename: str) -> str:
+        if filename.startswith("._"):
+            return "macOS AppleDouble Sidecars (._*)"
+        if filename.startswith("~$"):
+            return "Office Temp / Lock Files (~$)"
+        if filename in (".DS_Store", ".localized"):
+            return "macOS Finder (.DS_Store / .localized)"
+        if filename in ("Thumbs.db", "Desktop.ini"):
+            return "Windows System Junk (Thumbs.db)"
+        return "Other System Garbage"
 
     def scan_directory(self, source_path, excluded_projects: Set[str] = None, progress_cb = None):
         """Recursively scan directory or multiple directories, finding files and project folders."""
@@ -53,11 +66,14 @@ class Scanner:
                     dirs.clear() # Do not traverse INSIDE the project!
                     continue
 
-
                 # 3. Otherwise, process individual files
                 for file in files:
                     if self.is_garbage(file):
                         self.ignored_garbage_count += 1
+                        g_type = self.classify_garbage(file)
+                        self.garbage_breakdown[g_type] = self.garbage_breakdown.get(g_type, 0) + 1
+                        if len(self.garbage_samples) < 25:
+                            self.garbage_samples.append(os.path.join(root, file))
                         continue
                         
                     full_path = os.path.join(root, file)
@@ -66,4 +82,5 @@ class Scanner:
 
                     if progress_cb and (scan_count % 100 == 0):
                         progress_cb(0, 0, f"🔍 Scanning: {len(self.files_to_process)} files found... ({os.path.basename(root)})")
+
 
