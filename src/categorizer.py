@@ -45,5 +45,9 @@ class Categorizer:
 
     def get_file_category(self, filename: str) -> str:
         """Returns the primary category for a given file based on its extension."""
-        ext = "." + filename.rsplit('.', 1)[-1].lower() if '.' in filename else ""
+        if '.' in filename[1:]:
+            ext = "." + filename.rsplit('.', 1)[-1].lower()
+        else:
+            ext = ""
         return self.ext_to_category.get(ext, "Unsorted")
+

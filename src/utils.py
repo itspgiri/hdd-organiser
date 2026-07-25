@@ -65,8 +65,11 @@ def save_run_to_history(history_file: str, run_data: dict):
     history.insert(0, run_data)
     history = history[:50]
     try:
-        with open(history_file, 'w', encoding='utf-8') as f:
+        tmp_file = history_file + ".tmp"
+        with open(tmp_file, 'w', encoding='utf-8') as f:
             json.dump(history, f, indent=2)
+        os.replace(tmp_file, history_file)
     except Exception:
         pass
+
 

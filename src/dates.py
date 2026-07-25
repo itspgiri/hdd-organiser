@@ -114,13 +114,8 @@ class DateExtractor:
             return None
 
         try:
-            old_stderr = sys.stderr
-            sys.stderr = _DUMMY_STDERR
-            try:
-                with open(filepath, 'rb') as f:
-                    tags = exifread.process_file(f, stop_tag="EXIF DateTimeOriginal", details=False, log_level="CRITICAL")
-            finally:
-                sys.stderr = old_stderr
+            with open(filepath, 'rb') as f:
+                tags = exifread.process_file(f, stop_tag="EXIF DateTimeOriginal", details=False, log_level="CRITICAL")
 
             # Priority: DateTimeOriginal > DateTimeDigitized > Image DateTime > GPS Date
             if 'EXIF DateTimeOriginal' in tags:
@@ -134,6 +129,7 @@ class DateExtractor:
         except Exception:
             pass
         return None
+
 
     def _parse_exif_date(self, date_str: str) -> tuple[Optional[str], Optional[str]]:
         """Parses EXIF date string (YYYY:MM:DD HH:MM:SS)"""
