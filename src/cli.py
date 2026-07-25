@@ -68,7 +68,8 @@ def run_cli():
     
     print_header("Scan & Preview")
     print_info(f"Scanning {source_abs} for files... (This may take a minute)")
-    scanner.scan_directory(source_abs)
+    scanner.scan_directory(source_abs, is_preview=args.preview)
+
     
     # Calculate total size of files to process
     total_size_bytes = 0
@@ -120,18 +121,19 @@ def run_cli():
     dates = DateExtractor(categorizer)
     engine.start_caffeinate()
     
-    # Pre-pass: Index HEIC dates for Live Photos (pairs HEIC + MOV)
-    live_photo_dates: Dict[Tuple[str, str], Tuple[str, str]] = {}
-    for fp in scanner.files_to_process:
-        if fp.rsplit('.', 1)[-1].lower() == 'heic':
-            y, m = dates.extract_date(fp)
-            if y and m:
-                dir_name, fn = os.path.split(fp)
-                name_only = fn.rsplit('.', 1)[0]
-                live_photo_dates[(dir_name, name_only)] = (y, m)
-
     try:
+        # Pre-pass: Index HEIC dates for Live Photos (pairs HEIC + MOV)
+        live_photo_dates: Dict[Tuple[str, str], Tuple[str, str]] = {}
+        for fp in scanner.files_to_process:
+            if fp.rsplit('.', 1)[-1].lower() == 'heic':
+                y, m = dates.extract_date(fp)
+                if y and m:
+                    dir_name, fn = os.path.split(fp)
+                    name_only = fn.rsplit('.', 1)[0]
+                    live_photo_dates[(dir_name, name_only)] = (y, m)
+
         with get_progress_bar() as progress:
+
             # 2. Transfer Code Projects Intact
             proj_task = progress.add_task("[magenta]Copying Code Projects...", total=len(scanner.projects_found))
             for proj in scanner.projects_found:
