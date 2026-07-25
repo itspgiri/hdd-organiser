@@ -193,8 +193,8 @@ class OrganizerAPI:
 
             import threading
             from concurrent.futures import ThreadPoolExecutor
-            max_workers = min(16, max(4, os.cpu_count() or 4))
-            self.log_cb(f"Using {max_workers} parallel worker threads for fast transfer.")
+            max_workers = 4
+            self.log_cb(f"Using {max_workers} safe parallel worker threads for fast transfer.")
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 list(executor.map(process_single_file, scanner.files_to_process))
