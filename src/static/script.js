@@ -179,7 +179,8 @@ function updateProgressUI(data) {
     
     fill.style.width = `${percent}%`;
     percentTxt.innerText = `${percent}%`;
-    countTxt.innerText = `${data.progress} / ${data.total}`;
+    const etaText = data.eta ? ` • ${data.eta}` : '';
+    countTxt.innerText = `${data.progress} / ${data.total}${etaText}`;
     msgTxt.innerText = data.message || "";
     
     allLogs = data.logs || [];

@@ -109,9 +109,11 @@ class OrganizerAPI:
                     shutil.copytree(proj, dest_proj, dirs_exist_ok=True)
                     
             # Files - Multi-Threaded Parallel Execution (8 Workers)
+            import time
             total_files = len(scanner.files_to_process)
             completed_counter = [0]
             counter_lock = threading.Lock()
+            start_time = time.time()
 
             def process_single_file(file_path):
                 filename = os.path.basename(file_path)
@@ -169,8 +171,25 @@ class OrganizerAPI:
                 with counter_lock:
                     completed_counter[0] += 1
                     idx = completed_counter[0]
+                    elapsed = time.time() - start_time
+                    eta_str = ""
+                    if elapsed > 0.5 and idx > 0:
+                        rate = idx / elapsed
+                        rem_files = total_files - idx
+                        rem_seconds = int(rem_files / rate)
+                        if rem_seconds >= 3600:
+                            h = rem_seconds // 3600
+                            m = (rem_seconds % 3600) // 60
+                            eta_str = f"⏳ ~{h}h {m}m remaining"
+                        elif rem_seconds >= 60:
+                            m = rem_seconds // 60
+                            s = rem_seconds % 60
+                            eta_str = f"⏳ ~{m}m {s}s remaining"
+                        else:
+                            eta_str = f"⏳ ~{rem_seconds}s remaining"
+
                     if idx % 5 == 0 or idx == total_files:
-                        self.progress_cb(idx, total_files, f"Organized ({idx}/{total_files}): {filename}")
+                        self.progress_cb(idx, total_files, f"Organizing: {filename}", eta_str)
 
             import threading
             from concurrent.futures import ThreadPoolExecutor

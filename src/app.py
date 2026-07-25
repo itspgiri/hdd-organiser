@@ -21,6 +21,7 @@ class UIState:
     progress = 0
     total = 100
     message = "Waiting to start..."
+    eta = ""
     logs = []
     preview_summary = {}
 
@@ -31,6 +32,7 @@ def reset_state():
     state.progress = 0
     state.total = 100
     state.message = "Ready"
+    state.eta = ""
     state.logs = []
     state.preview_summary = {}
 
@@ -39,10 +41,12 @@ def log_cb(msg: str):
     state.logs.append(msg)
     state.message = msg
 
-def progress_cb(current: int, total: int, msg: str):
+def progress_cb(current: int, total: int, msg: str, eta: str = ""):
     state.progress = current
     state.total = total
     state.message = msg
+    if eta:
+        state.eta = eta
 
 @app.route("/")
 def index():
@@ -113,6 +117,7 @@ def get_status():
         "progress": state.progress,
         "total": state.total,
         "message": state.message,
+        "eta": state.eta,
         "logs": state.logs,
         "preview_summary": state.preview_summary
     })
