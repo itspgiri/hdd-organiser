@@ -39,7 +39,8 @@ class OrganizerAPI:
         
         self.log_cb(f"Scanning {source_abs} for files...")
         excluded_set = set(excluded_projects or [])
-        scanner.scan_directory(source_abs, excluded_projects=excluded_set, progress_cb=self.progress_cb, cancel_check=lambda: self.cancelled)
+        scanner.scan_directory(source_abs, excluded_projects=excluded_set, progress_cb=self.progress_cb, cancel_check=lambda: self.cancelled, is_preview=is_preview)
+
         
         if self.cancelled:
             self.log_cb("Operation cancelled by user. Progress saved.")
