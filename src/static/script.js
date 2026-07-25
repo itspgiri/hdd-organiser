@@ -162,6 +162,33 @@ function renderPreviewDashboard(summary) {
     `;
 }
 
+function updateProgressUI(data) {
+    const fill = document.getElementById('progress-fill');
+    const percentTxt = document.getElementById('progress-percentage');
+    const countTxt = document.getElementById('progress-count');
+    const msgTxt = document.getElementById('current-message');
+    
+    const percent = data.total > 0 ? Math.min(100, Math.round((data.progress / data.total) * 100)) : 0;
+    
+    fill.style.width = `${percent}%`;
+    percentTxt.innerText = `${percent}%`;
+    countTxt.innerText = `${data.progress} / ${data.total}`;
+    msgTxt.innerText = data.message || "";
+    
+    allLogs = data.logs || [];
+    filterLogs();
+}
+
+function filterLogs() {
+    const query = (document.getElementById('log-filter') ? document.getElementById('log-filter').value : "").toLowerCase();
+    const logContent = document.getElementById('log-content');
+    if (!logContent) return;
+    const filtered = query ? allLogs.filter(l => l.toLowerCase().includes(query)) : allLogs;
+    logContent.innerHTML = filtered.map(log => `<div>${log}</div>`).join('');
+    const logContainer = document.getElementById('log-container');
+    if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
+}
+
 async function inspectProject(path, name) {
     currentInspectedPath = path;
     const modal = document.getElementById('inspect-modal');

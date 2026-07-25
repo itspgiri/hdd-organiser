@@ -159,6 +159,11 @@ class OrganizerAPI:
                 
             self.progress_cb(total_files, total_files, "Complete")
             self.log_cb("All done! 100% of files organized safely.")
+            try:
+                import subprocess
+                subprocess.Popen(["afplay", "/System/Library/Sounds/Glass.aiff"])
+            except Exception:
+                pass
             return True
             
         except Exception as e:
