@@ -12,6 +12,7 @@ class FileEngine:
         self.dest_root = dest_root
         self.db_path = os.path.join(dest_root, ".organizer_checkpoint.db")
         self.lock = threading.Lock()
+        self._uncommitted = 0
         self._init_db()
         self.caffeinate_process = None
 
@@ -19,6 +20,8 @@ class FileEngine:
         """Initializes SQLite database for ACID guarantees and content deduplication during transfer."""
         with self.lock:
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.conn.execute('PRAGMA synchronous = NORMAL;')
+            self.conn.execute('PRAGMA journal_mode = WAL;')
             self.conn.execute('''
                 CREATE TABLE IF NOT EXISTS copies (
                     source_path TEXT PRIMARY KEY,
@@ -66,7 +69,10 @@ class FileEngine:
                 INSERT OR REPLACE INTO copies (source_path, dest_path, status, size, mtime, part_hash)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (source_path, dest_path, 'completed', size, mtime, part_hash))
-            self.conn.commit()
+            self._uncommitted += 1
+            if self._uncommitted >= 50:
+                self.conn.commit()
+                self._uncommitted = 0
 
     def set_finder_tag(self, filepath: str, color_num: str, tag_name: str):
         """Applies a native macOS Finder tag to a file."""
@@ -168,6 +174,11 @@ class FileEngine:
         os.rename(tmp_path, target_path)
 
     def close(self):
-        self.conn.close()
+        with self.lock:
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            self.conn.close()
         self.stop_caffeinate()
 
