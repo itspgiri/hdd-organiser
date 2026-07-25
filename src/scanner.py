@@ -26,6 +26,7 @@ class Scanner:
         self.garbage_samples: List[str] = []
         self.gdrive_zips_extracted = 0
         self.gdrive_zip_names: List[str] = []
+        self.processed_zips: Set[str] = set()
 
     def is_garbage(self, filename: str) -> bool:
         if filename in GARBAGE_FILES:
@@ -34,7 +35,10 @@ class Scanner:
             return True
         return False
 
-    def is_gdrive_zip(self, filename: str) -> bool:
+    def is_gdrive_zip(self, filename: str, root_path: str = "") -> bool:
+        # Never unzip zip files that are inside a staging folder
+        if ".unzipped_" in root_path:
+            return False
         fn = filename.lower()
         if not fn.endswith('.zip'):
             return False
@@ -52,15 +56,29 @@ class Scanner:
             return "Windows System Junk (Thumbs.db)"
         return "Other System Garbage"
 
-
     def extract_gdrive_zip(self, zip_path: str, progress_cb=None) -> List[str]:
-        """Extracts Google Drive zip archive into a temporary folder and returns list of extracted file paths."""
+        """Extracts Google Drive zip archive into a temporary folder cleanly with loop protection."""
         import zipfile
+        if zip_path in self.processed_zips:
+            return []
+        self.processed_zips.add(zip_path)
+
         extracted_files = []
         try:
             zip_dir = os.path.dirname(zip_path)
             zip_name = os.path.splitext(os.path.basename(zip_path))[0]
             staging_dir = os.path.join(zip_dir, f".unzipped_{zip_name}")
+
+            # If staging dir already exists and contains extracted files, re-use them directly without unzipping again!
+            if os.path.exists(staging_dir):
+                for root, dirs, files in os.walk(staging_dir):
+                    for f in files:
+                        base_f = os.path.basename(f)
+                        if not self.is_garbage(base_f):
+                            extracted_files.append(os.path.join(root, f))
+                if extracted_files:
+                    return extracted_files
+
             os.makedirs(staging_dir, exist_ok=True)
 
             if progress_cb:
@@ -101,7 +119,7 @@ class Scanner:
                 if cancel_check and cancel_check():
                     return
 
-                # 1. Prune skipped system / heavy build directories in-place BEFORE entering them
+                # 1. Prune skipped system / heavy build / unzipped staging directories in-place BEFORE entering them
                 dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
 
                 # 2. Check if this is a Code Project
@@ -123,8 +141,8 @@ class Scanner:
                             self.garbage_samples.append(full_path)
                         continue
 
-                    # 4. Auto-extract Google Drive / Takeout / Download Zip Archives
-                    if auto_unzip_gdrive and self.is_gdrive_zip(file):
+                    # 4. Auto-extract Google Drive / Takeout / Download Zip Archives (with loop protection)
+                    if auto_unzip_gdrive and self.is_gdrive_zip(file, root_path=root):
                         unzipped_items = self.extract_gdrive_zip(full_path, progress_cb=progress_cb)
                         for u_item in unzipped_items:
                             u_base = os.path.basename(u_item)
@@ -138,6 +156,7 @@ class Scanner:
 
                     if progress_cb and (scan_count % 100 == 0):
                         progress_cb(0, 0, f"🔍 Scanning: {len(self.files_to_process)} files found... ({os.path.basename(root)})")
+
 
 
 
