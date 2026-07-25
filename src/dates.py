@@ -24,8 +24,8 @@ class DateExtractor:
         """
         filename = os.path.basename(filepath)
         
-        # 1 & 2. Try EXIF for Media files
-        date_str = self._get_exif_date(filepath) or self._get_video_date(filepath)
+        # 1 & 2. Try EXIF, Video Header, or PDF CreationDate metadata
+        date_str = self._get_exif_date(filepath) or self._get_video_date(filepath) or self._get_pdf_date(filepath)
         if date_str:
             parsed = self._parse_exif_date(date_str)
             if parsed[0]:
@@ -78,6 +78,31 @@ class DateExtractor:
                         dt = datetime.datetime.fromtimestamp(unix_time, tz=datetime.timezone.utc)
                         if 1980 <= dt.year <= 2100:
                             return f"{dt.year}:{dt.month:02d}:01 00:00:00"
+        except Exception:
+            pass
+        return None
+
+    def _get_pdf_date(self, filepath: str) -> Optional[str]:
+        """Lightweight PDF document CreationDate extraction from PDF trailer header/footer."""
+        ext = "." + filepath.rsplit('.', 1)[-1].lower() if '.' in filepath else ""
+        if ext != ".pdf":
+            return None
+        try:
+            with open(filepath, 'rb') as f:
+                head = f.read(8192)
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                tail_size = min(size, 8192)
+                f.seek(size - tail_size, os.SEEK_SET)
+                tail = f.read(tail_size)
+                content = head + tail
+                idx = content.find(b'/CreationDate')
+                if idx != -1:
+                    sub = content[idx:idx+40].decode('latin1', errors='ignore')
+                    match = re.search(r'D:(20\d{6})', sub)
+                    if match:
+                        d_str = match.group(1)
+                        return f"{d_str[:4]}:{d_str[4:6]}:01 00:00:00"
         except Exception:
             pass
         return None
