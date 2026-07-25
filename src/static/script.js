@@ -168,9 +168,24 @@ async function startOrganizing() {
         
         if (data.success) {
             lastWasPreview = isPreview;
+            document.getElementById('confirm-box').classList.add('hidden');
+            document.getElementById('review-panel').classList.add('hidden');
+            
+            const fill = document.getElementById('progress-fill');
+            const percentTxt = document.getElementById('progress-percentage');
+            const countTxt = document.getElementById('progress-count');
+            const heading = document.getElementById('status-heading');
+            if (fill) fill.style.width = "0%";
+            if (percentTxt) percentTxt.innerText = "0%";
+            if (countTxt) countTxt.innerText = "0 / 0";
+            if (heading) {
+                heading.innerText = isPreview ? "🔍 Scanning Files (Preview)..." : "⚡ Organizing & Transferring Files...";
+            }
+
             showView('progress-view');
             startPolling();
         } else {
+
             alert("Error starting: " + data.error);
             btn.disabled = false;
             btn.innerText = "Start Organizing";
@@ -370,18 +385,28 @@ function updateProgressUI(data) {
     const percentTxt = document.getElementById('progress-percentage');
     const countTxt = document.getElementById('progress-count');
     const msgTxt = document.getElementById('current-message');
+    const heading = document.getElementById('status-heading');
     
+    if (data.status === 'running' && heading) {
+        if (data.message && data.message.includes("Scanning")) {
+            heading.innerText = lastWasPreview ? "🔍 Scanning Files (Preview)..." : "🔍 Scanning Files...";
+        } else {
+            heading.innerText = lastWasPreview ? "🔍 Analyzing Preview..." : "⚡ Copying & Organizing Files...";
+        }
+    }
+
     const percent = data.total > 0 ? Math.min(100, Math.round((data.progress / data.total) * 100)) : 0;
     
-    fill.style.width = `${percent}%`;
-    percentTxt.innerText = `${percent}%`;
+    if (fill) fill.style.width = `${percent}%`;
+    if (percentTxt) percentTxt.innerText = `${percent}%`;
     const etaText = data.eta ? ` • ${data.eta}` : '';
-    countTxt.innerText = `${data.progress} / ${data.total}${etaText}`;
-    msgTxt.innerText = data.message || "";
+    if (countTxt) countTxt.innerText = `${data.progress.toLocaleString()} / ${data.total.toLocaleString()}${etaText}`;
+    if (msgTxt && data.message) msgTxt.innerText = data.message;
     
     allLogs = data.logs || [];
     filterLogs();
 }
+
 
 function filterLogs() {
     const query = (document.getElementById('log-filter') ? document.getElementById('log-filter').value : "").toLowerCase();
@@ -443,11 +468,15 @@ function toggleExcludeCurrentProject() {
 }
 
 async function executeFullCopy() {
+    lastWasPreview = false;
     document.getElementById('preview-mode').checked = false;
     document.getElementById('confirm-box').classList.add('hidden');
     document.getElementById('default-actions').style.display = "block";
+    const heading = document.getElementById('status-heading');
+    if (heading) heading.innerText = "🔍 Scanning Files...";
     await startOrganizing();
 }
+
 
 function resetToSetup() {
     document.getElementById('start-btn').disabled = false;
