@@ -140,6 +140,40 @@ def trash_duplicates():
     count = api.trash_duplicates(source_paths)
     return jsonify({"success": True, "count": count})
 
+@app.route("/api/list_volumes", methods=["GET"])
+def list_volumes():
+    import subprocess
+    volumes = []
+    # 1. Check /Volumes
+    if os.path.exists("/Volumes"):
+        for v in os.listdir("/Volumes"):
+            full_p = os.path.join("/Volumes", v)
+            if os.path.isdir(full_p):
+                try:
+                    usage = shutil.disk_usage(full_p)
+                    from .utils import format_size
+                    volumes.append({
+                        "name": v,
+                        "path": full_p,
+                        "free": format_size(usage.free),
+                        "total": format_size(usage.total),
+                        "mounted": True
+                    })
+                except Exception:
+                    pass
+    # 2. Check diskutil for unmounted disks
+    unmounted = []
+    try:
+        res = subprocess.run(["diskutil", "list"], capture_output=True, text=True)
+        lines = res.stdout.split('\n')
+        for line in lines:
+            if "/dev/disk" in line or "external" in line.lower():
+                unmounted.append(line.strip())
+    except Exception:
+        pass
+
+    return jsonify({"volumes": volumes, "diskutil_summary": unmounted[:10]})
+
 def run_organizer(source, dest, is_preview=False, dest_mode="new"):
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
