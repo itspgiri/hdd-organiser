@@ -7,9 +7,21 @@ import threading
 from typing import Optional, Tuple
 import xattr # Used for macOS Finder tags
 
+try:
+    import ctypes
+    _libsystem = ctypes.CDLL('/usr/lib/libSystem.dylib')
+    _libsystem.copyfile.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_uint32]
+    _libsystem.copyfile.restype = ctypes.c_int
+    _COPYFILE_ALL = 32767
+    _COPYFILE_CLONE = 16777216
+    _HAS_NATIVE_COPYFILE = True
+except Exception:
+    _HAS_NATIVE_COPYFILE = False
+
 class FileEngine:
     def __init__(self, dest_root: str):
         self.dest_root = dest_root
+        os.makedirs(dest_root, exist_ok=True)
         self.db_path = os.path.join(dest_root, ".organizer_checkpoint.db")
         self.lock = threading.Lock()
         self.dirs_lock = threading.Lock()
@@ -176,13 +188,22 @@ class FileEngine:
             counter += 1
 
     def copy_file(self, source_path: str, target_path: str):
-        """Safe out-of-place copy via tmp file and APFS clonefile (shutil.copy2)."""
+        """Native macOS Darwin Kernel Copy Engine via copyfile syscall."""
         tmp_path = target_path + ".tmp"
-        
-        # shutil.copy2 on macOS APFS naturally attempts `clonefile` first,
-        # providing instantaneous zero-space copies if on the same drive volume.
-        # If not, it falls back to a fast stream copy.
-        shutil.copy2(source_path, tmp_path)
+        copied = False
+        if _HAS_NATIVE_COPYFILE:
+            try:
+                src_b = source_path.encode('utf-8')
+                tmp_b = tmp_path.encode('utf-8')
+                ret = _libsystem.copyfile(src_b, tmp_b, None, _COPYFILE_ALL | _COPYFILE_CLONE)
+                if ret == 0:
+                    copied = True
+            except Exception:
+                pass
+
+        if not copied:
+            shutil.copy2(source_path, tmp_path)
+
         os.rename(tmp_path, target_path)
 
     def close(self):
