@@ -145,9 +145,21 @@ def run_cli():
                         c += 1
                     dest_proj = os.path.join(dest_abs, "Code", f"{proj_name}_{c}")
                 try:
-                    shutil.copytree(proj, dest_proj, dirs_exist_ok=True)
+                    shutil.copytree(
+                        proj,
+                        dest_proj,
+                        dirs_exist_ok=True,
+                        symlinks=True,
+                        ignore_dangling_symlinks=True,
+                        ignore=shutil.ignore_patterns(
+                            "node_modules", ".next", ".firebase", ".git", ".venv",
+                            "venv", "__pycache__", ".turbo", "dist", "build",
+                            ".cache", "target", ".gradle", ".cargo", ".DS_Store"
+                        )
+                    )
                 except Exception as proj_err:
                     print_warning(f"Issue copying code project {proj_name}: {str(proj_err)}")
+
                 progress.advance(proj_task)
 
 

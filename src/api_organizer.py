@@ -174,9 +174,21 @@ class OrganizerAPI:
 
                 self.progress_cb(i + 1, total_items, f"Copying project: {os.path.basename(dest_proj)}")
                 try:
-                    shutil.copytree(proj, dest_proj, dirs_exist_ok=True)
+                    shutil.copytree(
+                        proj,
+                        dest_proj,
+                        dirs_exist_ok=True,
+                        symlinks=True,
+                        ignore_dangling_symlinks=True,
+                        ignore=shutil.ignore_patterns(
+                            "node_modules", ".next", ".firebase", ".git", ".venv",
+                            "venv", "__pycache__", ".turbo", "dist", "build",
+                            ".cache", "target", ".gradle", ".cargo", ".DS_Store"
+                        )
+                    )
                 except Exception as proj_err:
                     self.log_cb(f"Warning: Issue copying code project {proj_name}: {str(proj_err)}")
+
 
                     
             # 2. Files - Multi-Threaded Parallel Execution (4 Workers)
