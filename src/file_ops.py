@@ -225,7 +225,11 @@ class FileEngine:
                     copied = False
 
             if not copied:
-                shutil.copy2(source_path, tmp_path)
+                try:
+                    shutil.copyfile(source_path, tmp_path)
+                except Exception:
+                    shutil.copy2(source_path, tmp_path)
+
 
             if os.path.exists(tmp_path):
                 os.replace(tmp_path, target_path)

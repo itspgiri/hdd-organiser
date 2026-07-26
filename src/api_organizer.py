@@ -396,13 +396,26 @@ class OrganizerAPI:
                 size = os.path.getsize(file_path)
                 mtime = os.path.getmtime(file_path)
 
-                final_dest, part_hash = engine.resolve_destination(target_base, filename, size, file_path)
-                if final_dest:
-                    shutil.move(file_path, final_dest)
-                    engine.record_copy(file_path, final_dest, size, mtime, part_hash)
+                final_dest = None
+                try:
+                    final_dest, part_hash = engine.resolve_destination(target_base, filename, size, file_path)
+                    if final_dest:
+                        try:
+                            shutil.move(file_path, final_dest)
+                        except OSError:
+                            shutil.copyfile(file_path, final_dest)
+                            try:
+                                os.remove(file_path)
+                            except OSError:
+                                pass
+                        engine.record_copy(file_path, final_dest, size, mtime, part_hash)
+                finally:
+                    if final_dest:
+                        engine.release_reservation(final_dest)
 
             # Remove empty directory tree
             shutil.rmtree(project_folder_path, ignore_errors=True)
+
             return True, "Project dissolved and files re-sorted successfully!"
         except Exception as e:
             return False, str(e)
