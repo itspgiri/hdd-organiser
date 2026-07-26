@@ -42,17 +42,21 @@ class DateExtractor:
                 except ValueError:
                     pass
                     
-        # 4 & 5. macOS Filesystem Fallbacks
+        # 4 & 5. macOS Filesystem Fallbacks (prefer earliest real historical date: min of mtime and birthtime)
         try:
             stat = os.stat(filepath)
-            # Use birthtime if available (macOS), else mtime
-            timestamp = getattr(stat, 'st_birthtime', stat.st_mtime)
-            dt = datetime.datetime.fromtimestamp(timestamp)
-            # Sanity check (no dates from 1970)
-            if dt.year > 1980:
-                return str(dt.year), self.months[dt.month - 1]
+            btime = getattr(stat, 'st_birthtime', stat.st_mtime)
+            mtime = stat.st_mtime
+            # Select the earliest valid historical timestamp (prevents newly copied birthtime from overriding original mtime)
+            valid_ts = [t for t in (mtime, btime) if t > 315532800] # 1980-01-01
+            if valid_ts:
+                timestamp = min(valid_ts)
+                dt = datetime.datetime.fromtimestamp(timestamp)
+                if dt.year > 1980:
+                    return str(dt.year), self.months[dt.month - 1]
         except (OSError, ValueError):
             pass
+
             
         # 6. Fallback
         return None, None
