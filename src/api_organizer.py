@@ -164,9 +164,20 @@ class OrganizerAPI:
                     return False
                 proj_name = os.path.basename(proj)
                 dest_proj = os.path.join(dest_abs, "Code", proj_name)
-                self.progress_cb(i + 1, total_items, f"Copying project: {proj_name}")
-                if not os.path.exists(dest_proj):
+                
+                # Collision handling for duplicate project folder names
+                if os.path.exists(dest_proj):
+                    c = 1
+                    while os.path.exists(os.path.join(dest_abs, "Code", f"{proj_name}_{c}")):
+                        c += 1
+                    dest_proj = os.path.join(dest_abs, "Code", f"{proj_name}_{c}")
+
+                self.progress_cb(i + 1, total_items, f"Copying project: {os.path.basename(dest_proj)}")
+                try:
                     shutil.copytree(proj, dest_proj, dirs_exist_ok=True)
+                except Exception as proj_err:
+                    self.log_cb(f"Warning: Issue copying code project {proj_name}: {str(proj_err)}")
+
                     
             # 2. Files - Multi-Threaded Parallel Execution (4 Workers)
             import time

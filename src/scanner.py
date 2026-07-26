@@ -212,10 +212,13 @@ class Scanner:
                 if not os.path.exists(src):
                     continue
                 for root, dirs, files in os.walk(src):
+                    if cancel_check and cancel_check():
+                        return
                     dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
                     for f in files:
                         if self.is_gdrive_zip(f, root_path=root):
                             gdrive_zips_to_extract.append(os.path.join(root, f))
+
         
         total_zips = len(gdrive_zips_to_extract)
 

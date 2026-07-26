@@ -36,8 +36,9 @@ class FileEngine:
     def _init_db(self):
         """Initializes SQLite database for ACID guarantees and content deduplication during transfer."""
         with self.lock:
-            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=60.0)
             self.conn.execute('PRAGMA synchronous = NORMAL;')
+
             self.conn.execute('PRAGMA journal_mode = WAL;')
             self.conn.execute('PRAGMA cache_size = -64000;') # 64MB RAM index cache
             self.conn.execute('PRAGMA temp_store = MEMORY;')

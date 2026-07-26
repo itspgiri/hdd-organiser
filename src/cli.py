@@ -139,9 +139,17 @@ def run_cli():
             for proj in scanner.projects_found:
                 proj_name = os.path.basename(proj)
                 dest_proj = os.path.join(dest_abs, "Code", proj_name)
-                if not os.path.exists(dest_proj):
+                if os.path.exists(dest_proj):
+                    c = 1
+                    while os.path.exists(os.path.join(dest_abs, "Code", f"{proj_name}_{c}")):
+                        c += 1
+                    dest_proj = os.path.join(dest_abs, "Code", f"{proj_name}_{c}")
+                try:
                     shutil.copytree(proj, dest_proj, dirs_exist_ok=True)
+                except Exception as proj_err:
+                    print_warning(f"Issue copying code project {proj_name}: {str(proj_err)}")
                 progress.advance(proj_task)
+
 
             # 3. Transfer Files
             file_task = progress.add_task("[cyan]Organizing Files...", total=len(scanner.files_to_process))
