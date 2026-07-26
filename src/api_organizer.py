@@ -220,14 +220,22 @@ class OrganizerAPI:
                 except OSError:
                     return
                     
-                final_dest, part_hash = engine.resolve_destination(target_base, filename, size, file_path)
-                if final_dest is None:
-                    engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime, part_hash)
-                else:
-                    engine.copy_file(file_path, final_dest)
-                    if "Unsorted" in rel_dest:
-                        engine.set_finder_tag(final_dest, "5", "To Review")
-                    engine.record_copy(file_path, final_dest, size, mtime, part_hash)
+                final_dest = None
+                try:
+                    final_dest, part_hash = engine.resolve_destination(target_base, filename, size, file_path)
+                    if final_dest is None:
+                        engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime, part_hash)
+                    else:
+                        engine.copy_file(file_path, final_dest)
+                        if "Unsorted" in rel_dest:
+                            engine.set_finder_tag(final_dest, "5", "To Review")
+                        engine.record_copy(file_path, final_dest, size, mtime, part_hash)
+                except Exception as file_err:
+                    self.log_cb(f"Warning: Skipped problem file {filename}: {str(file_err)}")
+                finally:
+                    if final_dest:
+                        engine.release_reservation(final_dest)
+
 
                 with counter_lock:
                     completed_counter[0] += 1

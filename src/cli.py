@@ -187,20 +187,22 @@ def run_cli():
                 except OSError:
                     continue # File disappeared during run
 
-                final_dest, part_hash = engine.resolve_destination(target_base, filename, size, file_path)
-                
-                if final_dest is None:
-                    # Duplicate skipped
-                    engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime, part_hash)
-                    continue
-                    
-                engine.copy_file(file_path, final_dest)
-                
-                # If it ended up in Unsorted, add the yellow Finder Tag "To Review"
-                if "Unsorted" in rel_dest:
-                    engine.set_finder_tag(final_dest, "5", "To Review")
-                    
-                engine.record_copy(file_path, final_dest, size, mtime, part_hash)
+                final_dest = None
+                try:
+                    final_dest, part_hash = engine.resolve_destination(target_base, filename, size, file_path)
+                    if final_dest is None:
+                        engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime, part_hash)
+                    else:
+                        engine.copy_file(file_path, final_dest)
+                        if "Unsorted" in rel_dest:
+                            engine.set_finder_tag(final_dest, "5", "To Review")
+                        engine.record_copy(file_path, final_dest, size, mtime, part_hash)
+                except Exception as file_err:
+                    print_warning(f"Skipped problem file {filename}: {str(file_err)}")
+                finally:
+                    if final_dest:
+                        engine.release_reservation(final_dest)
+
 
         print_success("\nAll done! 100% of files organized safely.")
     

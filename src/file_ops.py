@@ -25,10 +25,13 @@ class FileEngine:
         self.db_path = os.path.join(dest_root, ".organizer_checkpoint.db")
         self.lock = threading.Lock()
         self.dirs_lock = threading.Lock()
+        self.reserved_lock = threading.Lock()
         self.created_dirs = set()
+        self.reserved_paths = set()
         self._uncommitted = 0
         self._init_db()
         self.caffeinate_process = None
+
 
     def _init_db(self):
         """Initializes SQLite database for ACID guarantees and content deduplication during transfer."""
@@ -152,9 +155,15 @@ class FileEngine:
 
         return False, src_hash
 
+    def release_reservation(self, target_path: Optional[str]):
+        """Releases reservation lock on target path after copy attempt."""
+        if target_path:
+            with self.reserved_lock:
+                self.reserved_paths.discard(target_path)
+
     def resolve_destination(self, base_dest: str, filename: str, source_size: int, source_path: str) -> Tuple[Optional[str], str]:
         """
-        Calculates destination path. Handles global content duplicates and filename collisions.
+        Calculates destination path. Handles global content duplicates, parallel thread reservations, and filename collisions.
         Returns (None, part_hash) if file is an exact duplicate (should be skipped).
         Returns (new_path, part_hash) if file should be copied.
         """
@@ -164,47 +173,68 @@ class FileEngine:
             return None, src_hash
 
         self.ensure_dir(os.path.dirname(base_dest))
-        
-        if not os.path.exists(base_dest):
-            return base_dest, src_hash
-            
-        # Collision detected! Check if destination file is identical
-        dest_size = os.path.getsize(base_dest)
-        if dest_size == source_size:
-            if not src_hash:
-                src_hash = self._get_part_hash(source_path, source_size)
-            dst_hash = self._get_part_hash(base_dest, dest_size)
-            if src_hash == dst_hash and src_hash != "":
-                # Identical file! Skip copying.
-                return None, src_hash
-                
-        # Sizes differ or hashes differ. Rename destination.
-        name, ext = os.path.splitext(filename)
-        counter = 1
-        while True:
-            new_dest = os.path.join(os.path.dirname(base_dest), f"{name}_{counter}{ext}")
-            if not os.path.exists(new_dest):
-                return new_dest, src_hash
-            counter += 1
 
-    def copy_file(self, source_path: str, target_path: str):
-        """Native macOS Darwin Kernel Copy Engine via copyfile syscall."""
-        tmp_path = target_path + ".tmp"
-        copied = False
-        if _HAS_NATIVE_COPYFILE:
+        with self.reserved_lock:
+            def is_path_busy(p: str) -> bool:
+                return os.path.exists(p) or os.path.exists(p + ".tmp") or p in self.reserved_paths
+
+            # If target path is free, reserve it immediately for this thread
+            if not is_path_busy(base_dest):
+                self.reserved_paths.add(base_dest)
+                return base_dest, src_hash
+
+        # Base dest exists! Check if destination file is an identical duplicate
+        if os.path.exists(base_dest):
             try:
-                src_b = source_path.encode('utf-8')
-                tmp_b = tmp_path.encode('utf-8')
-                ret = _libsystem.copyfile(src_b, tmp_b, None, _COPYFILE_ALL | _COPYFILE_CLONE)
-                if ret == 0:
-                    copied = True
-            except Exception:
+                dest_size = os.path.getsize(base_dest)
+                if dest_size == source_size:
+                    if not src_hash:
+                        src_hash = self._get_part_hash(source_path, source_size)
+                    dst_hash = self._get_part_hash(base_dest, dest_size)
+                    if src_hash == dst_hash and src_hash != "":
+                        # Identical file! Skip copying.
+                        return None, src_hash
+            except OSError:
                 pass
 
-        if not copied:
-            shutil.copy2(source_path, tmp_path)
+        # Sizes differ or hashes differ or parallel thread busy. Find a free collision counter path.
+        name, ext = os.path.splitext(filename)
+        counter = 1
+        with self.reserved_lock:
+            while True:
+                candidate = os.path.join(os.path.dirname(base_dest), f"{name}_{counter}{ext}")
+                if not (os.path.exists(candidate) or os.path.exists(candidate + ".tmp") or candidate in self.reserved_paths):
+                    self.reserved_paths.add(candidate)
+                    return candidate, src_hash
+                counter += 1
 
-        os.rename(tmp_path, target_path)
+    def copy_file(self, source_path: str, target_path: str):
+        """Native macOS Darwin Kernel Copy Engine via copyfile syscall with safe temp file handling."""
+        tmp_path = target_path + ".tmp"
+        copied = False
+        try:
+            if _HAS_NATIVE_COPYFILE:
+                try:
+                    src_b = source_path.encode('utf-8')
+                    tmp_b = tmp_path.encode('utf-8')
+                    ret = _libsystem.copyfile(src_b, tmp_b, None, _COPYFILE_ALL | _COPYFILE_CLONE)
+                    if ret == 0 and os.path.exists(tmp_path):
+                        copied = True
+                except Exception:
+                    copied = False
+
+            if not copied:
+                shutil.copy2(source_path, tmp_path)
+
+            if os.path.exists(tmp_path):
+                os.replace(tmp_path, target_path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
 
     def close(self):
         with self.lock:
