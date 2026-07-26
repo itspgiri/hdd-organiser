@@ -86,6 +86,10 @@ class DateExtractor:
             pass
         return None
 
+    EXIF_EXTENSIONS = {".jpg", ".jpeg", ".tif", ".tiff", ".cr2", ".nef", ".arw", ".dng"}
+    VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".3gp"}
+    PDF_DATE_REGEX = re.compile(r'D:(20\d{6})')
+
     def _get_pdf_date(self, filepath: str) -> Optional[str]:
         """Lightweight PDF document CreationDate extraction from PDF trailer header/footer."""
         ext = "." + filepath.rsplit('.', 1)[-1].lower() if '.' in filepath else ""
@@ -103,13 +107,14 @@ class DateExtractor:
                 idx = content.find(b'/CreationDate')
                 if idx != -1:
                     sub = content[idx:idx+40].decode('latin1', errors='ignore')
-                    match = re.search(r'D:(20\d{6})', sub)
+                    match = self.PDF_DATE_REGEX.search(sub)
                     if match:
                         d_str = match.group(1)
                         return f"{d_str[:4]}:{d_str[4:6]}:01 00:00:00"
         except Exception:
             pass
         return None
+
 
     def _get_exif_date(self, filepath: str) -> Optional[str]:
         """Lightweight EXIF extraction reading only headers."""
