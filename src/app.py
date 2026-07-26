@@ -219,22 +219,40 @@ def export_csv():
     if not os.path.exists(db_path):
         return "No checkpoint database found", 404
     import sqlite3, io, csv
-    conn = sqlite3.connect(db_path)
-    cursor = conn.execute("SELECT source_path, dest_path, status, size, mtime FROM copies")
-    rows = cursor.fetchall()
-    conn.close()
+    from datetime import datetime
+    from .utils import format_size
+
+    try:
+        conn = sqlite3.connect(db_path, timeout=30.0)
+        cursor = conn.execute("SELECT source_path, dest_path, status, size, mtime FROM copies")
+        rows = cursor.fetchall()
+        conn.close()
+    except Exception as db_err:
+        return f"Database read error: {str(db_err)}", 500
+
+    output = io.BytesIO()
+    # Write UTF-8 BOM so Excel, Apple Numbers, & Google Sheets render non-ASCII characters cleanly
+    output.write(b'\xef\xbb\xbf')
     
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Source Path", "Destination Path", "Status", "Size (Bytes)", "Modification Time"])
-    writer.writerows(rows)
+    text_buffer = io.StringIO()
+    writer = csv.writer(text_buffer)
+    writer.writerow(["Source Path", "Destination Path", "Status", "Formatted Size", "Raw Size (Bytes)", "Modification Date"])
     
+    for r in rows:
+        src, dst, stat_val, sz, mt = r[0], r[1], r[2], r[3], r[4]
+        fmt_size = format_size(sz) if sz else "0 B"
+        mt_str = datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M:%S") if mt else ""
+        writer.writerow([src, dst, stat_val, fmt_size, sz, mt_str])
+
+    output.write(text_buffer.getvalue().encode('utf-8'))
+
     from flask import Response
     return Response(
         output.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-disposition": "attachment; filename=drive_organization_report.csv"}
+        mimetype="text/csv; charset=utf-8",
+        headers={"Content-disposition": "attachment; filename=Drive_Organizer_Audit_Report.csv"}
     )
+
 
 @app.route("/api/verify_transfer", methods=["GET"])
 def verify_transfer():
