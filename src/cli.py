@@ -149,7 +149,7 @@ def run_cli():
                         proj,
                         dest_proj,
                         dirs_exist_ok=True,
-                        symlinks=True,
+                        copy_function=shutil.copyfile,
                         ignore_dangling_symlinks=True,
                         ignore=shutil.ignore_patterns(
                             "node_modules", ".next", ".firebase", ".git", ".venv",
@@ -157,8 +157,22 @@ def run_cli():
                             ".cache", "target", ".gradle", ".cargo", ".DS_Store"
                         )
                     )
-                except Exception as proj_err:
-                    print_warning(f"Issue copying code project {proj_name}: {str(proj_err)}")
+                except Exception:
+                    try:
+                        shutil.copytree(
+                            proj,
+                            dest_proj,
+                            dirs_exist_ok=True,
+                            ignore_dangling_symlinks=True,
+                            ignore=shutil.ignore_patterns(
+                                "node_modules", ".next", ".firebase", ".git", ".venv",
+                                "venv", "__pycache__", ".turbo", "dist", "build",
+                                ".cache", "target", ".gradle", ".cargo", ".DS_Store"
+                            )
+                        )
+                    except Exception as proj_err:
+                        print_warning(f"Issue copying code project {proj_name}: {str(proj_err)}")
+
 
                 progress.advance(proj_task)
 
