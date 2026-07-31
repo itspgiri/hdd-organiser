@@ -213,13 +213,14 @@ class FileEngine:
         """Native macOS Darwin Kernel Copy Engine via copyfile syscall with safe temp file handling."""
         tmp_path = target_path + ".tmp"
         copied = False
+        src_size = os.path.getsize(source_path)
         try:
             if _HAS_NATIVE_COPYFILE:
                 try:
                     src_b = source_path.encode('utf-8')
                     tmp_b = tmp_path.encode('utf-8')
                     ret = _libsystem.copyfile(src_b, tmp_b, None, _COPYFILE_ALL | _COPYFILE_CLONE)
-                    if ret == 0 and os.path.exists(tmp_path):
+                    if ret == 0 and os.path.exists(tmp_path) and os.path.getsize(tmp_path) == src_size:
                         copied = True
                 except Exception:
                     copied = False
@@ -230,9 +231,13 @@ class FileEngine:
                 except Exception:
                     shutil.copy2(source_path, tmp_path)
 
-
             if os.path.exists(tmp_path):
+                tmp_size = os.path.getsize(tmp_path)
+                if tmp_size != src_size:
+                    raise IOError(f"Incomplete file copy: source is {src_size} bytes, but copy is {tmp_size} bytes.")
                 os.replace(tmp_path, target_path)
+            else:
+                raise IOError("Copy failed: temp target file was not created.")
         finally:
             if os.path.exists(tmp_path):
                 try:

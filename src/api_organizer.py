@@ -137,6 +137,9 @@ class OrganizerAPI:
         with open(os.path.join(dest_abs, ".metadata_never_index"), 'w') as f:
             f.write("")
 
+        # Automatic pre-transfer health check & auto-repair
+        self.auto_repair_if_needed(dest_abs)
+
         engine = FileEngine(dest_abs)
         dates = DateExtractor(categorizer)
         engine.start_caffeinate()
@@ -506,7 +509,7 @@ class OrganizerAPI:
         skipped_dup_count = 0
         missing_list = []
         mismatched_list = []
-        hash_check_limit = 200 # Sample up to 200 hashed files for fast execution
+        hash_check_limit = 10000 # Check SHA-256 hashes for up to 10,000 files for comprehensive verification
         hashes_checked = 0
 
         for source_path, dest_path, status, size, part_hash in rows:
@@ -555,5 +558,85 @@ class OrganizerAPI:
             "mismatched_list": mismatched_list[:10],
             "is_perfect": is_perfect
         }
+
+    def repair_transfer(self, dest_abs: str) -> dict:
+        """
+        Removes invalid, missing, or mismatched entries from checkpoint DB and deletes corrupted destination files,
+        allowing a subsequent transfer run to automatically re-copy only the failed files.
+        """
+        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db")
+        if not os.path.exists(db_path):
+            return {"success": False, "error": "No checkpoint database found at destination."}
+
+        try:
+            conn = sqlite3.connect(db_path, timeout=30.0)
+            cursor = conn.execute("SELECT source_path, dest_path, size, part_hash FROM copies")
+            rows = cursor.fetchall()
+            conn.close()
+        except Exception as db_err:
+            return {"success": False, "error": f"Database error: {str(db_err)}"}
+
+        engine = FileEngine(dest_abs)
+        purged_sources = []
+
+        for source_path, dest_path, size, part_hash in rows:
+            if dest_path == "DUPLICATE_SKIPPED":
+                continue
+
+            is_bad = False
+            if not os.path.exists(dest_path):
+                is_bad = True
+            else:
+                try:
+                    dest_size = os.path.getsize(dest_path)
+                    if dest_size != size:
+                        is_bad = True
+                    elif part_hash:
+                        dest_hash = engine._get_part_hash(dest_path, dest_size)
+                        if dest_hash and dest_hash != part_hash:
+                            is_bad = True
+                except OSError:
+                    is_bad = True
+
+            if is_bad:
+                purged_sources.append(source_path)
+                if os.path.exists(dest_path):
+                    try:
+                        os.remove(dest_path)
+                    except Exception:
+                        pass
+
+        engine.close()
+
+        if purged_sources:
+            try:
+                conn = sqlite3.connect(db_path, timeout=30.0)
+                cursor = conn.cursor()
+                cursor.executemany("DELETE FROM copies WHERE source_path = ?", [(s,) for s in purged_sources])
+                conn.commit()
+                conn.close()
+            except Exception as db_err:
+                return {"success": False, "error": f"Failed to update database: {str(db_err)}"}
+
+        return {
+            "success": True,
+            "repaired_count": len(purged_sources)
+        }
+
+    def auto_repair_if_needed(self, dest_abs: str):
+        """
+        Automatically inspects destination checkpoint database before transfer start,
+        purging any corrupted or missing file records from past interrupted runs.
+        """
+        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db")
+        if not os.path.exists(db_path):
+            return
+
+        res = self.repair_transfer(dest_abs)
+        if res.get("success") and res.get("repaired_count", 0) > 0:
+            count = res["repaired_count"]
+            self.log_cb(f"🧹 [Auto-Repair] Detected {count} missing/corrupted file record(s) from a previous interrupted run. Automatically cleared bad records so they will be re-transferred cleanly.")
+
+
 
 

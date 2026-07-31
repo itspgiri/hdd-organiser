@@ -677,12 +677,42 @@ async function runVerificationChecker() {
                 <div style="font-size: 11px; margin-top: 8px;">
                     ${errorHtml}
                 </div>
+                <div style="margin-top: 10px;">
+                    <button class="btn secondary" style="font-size: 11px; padding: 6px 12px;" onclick="repairAndResync('${dest.replace(/\\/g, '\\\\')}')">⚡ Repair & Re-Sync Failed Files</button>
+                </div>
             </div>`;
         }
     } catch (e) {
         area.innerHTML = "<div>Error running verification check</div>";
     }
 }
+
+async function repairAndResync(destPath) {
+    if (!confirm("This will clear corrupted/missing file records from the checkpoint database so they can be re-copied. Proceed?")) return;
+    try {
+        const response = await fetch('/api/repair_transfer', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({dest: destPath})
+        });
+        const data = await response.json();
+        if (data.success) {
+            alert(`Purged ${data.repaired_count} failed file record(s). Re-running transfer to copy missing & mismatched files...`);
+            // Run transfer again to re-sync
+            const confirmBtn = document.getElementById("confirm-transfer-btn");
+            if (confirmBtn) {
+                confirmBtn.click();
+            } else {
+                runVerification(destPath);
+            }
+        } else {
+            alert(`Repair error: ${data.error}`);
+        }
+    } catch (e) {
+        alert("Error connecting to server to repair transfer.");
+    }
+}
+
 
 async function loadHistoryView(shouldNavigate = true) {
     if (shouldNavigate) showView('history-view');

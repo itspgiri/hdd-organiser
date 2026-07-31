@@ -264,6 +264,18 @@ def verify_transfer():
     res = api.verify_transfer(dest)
     return jsonify(res)
 
+@app.route("/api/repair_transfer", methods=["POST"])
+def repair_transfer():
+    data = request.json or {}
+    dest = data.get("dest")
+    if not dest or not os.path.exists(dest):
+        return jsonify({"success": False, "error": "Destination path required"})
+    config_path = os.path.join(base_dir, "config.json")
+    api = OrganizerAPI(config_path, log_cb, progress_cb)
+    res = api.repair_transfer(dest)
+    return jsonify(res)
+
+
 @app.route("/api/history", methods=["GET"])
 def get_history():
     from .utils import load_run_history
