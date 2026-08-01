@@ -273,11 +273,18 @@ class OrganizerAPI:
                 except Exception as file_err:
                     err_msg = str(file_err)
                     if "Errno 27" in err_msg or "File too large" in err_msg:
+                        reason = "FAT32 file limit (>4GB)"
                         self.log_cb(f"⚠️ Skipped large file '{filename}': Target USB drive is formatted as FAT32 which has a 4 GB single file limit. Format drive as ExFAT or APFS to store files > 4 GB.")
                     elif "Errno 60" in err_msg or "timed out" in err_msg:
+                        reason = "iCloud cloud-only timeout"
                         self.log_cb(f"☁️ Skipped cloud file '{filename}': File is stored in iCloud and not downloaded to your Mac yet. Click the download cloud icon in Finder next to this file, then re-run transfer.")
                     else:
+                        reason = err_msg
                         self.log_cb(f"Warning: Skipped problem file {filename}: {err_msg}")
+
+                    # Record failed file status in database so integrity check and re-sync track it properly
+                    failed_dest = final_dest if final_dest else target_base
+                    engine.record_copy(file_path, failed_dest, size, mtime, part_hash="", status=f"failed: {reason}")
                 finally:
                     if final_dest:
                         engine.release_reservation(final_dest)
@@ -523,28 +530,45 @@ class OrganizerAPI:
                 skipped_dup_count += 1
                 continue
 
-            if not os.path.exists(dest_path):
+            if status and status.startswith("failed"):
                 missing_count += 1
-                missing_list.append(dest_path)
+                reason = status.split("failed: ", 1)[-1] if "failed: " in status else status
+                missing_list.append(f"{os.path.basename(source_path)} ({reason})")
                 continue
 
+            # Path resolution across volume mounts
+            target_check_path = dest_path
+            if not os.path.exists(target_check_path):
+                # Try finding file relative to dest_abs
+                fn = os.path.basename(dest_path)
+                found = False
+                for root, dirs, files in os.walk(dest_abs):
+                    if fn in files:
+                        target_check_path = os.path.join(root, fn)
+                        found = True
+                        break
+                if not found:
+                    missing_count += 1
+                    missing_list.append(f"{os.path.basename(source_path)} (File missing on destination)")
+                    continue
+
             try:
-                dest_size = os.path.getsize(dest_path)
+                dest_size = os.path.getsize(target_check_path)
                 if dest_size != size:
                     mismatched_count += 1
-                    mismatched_list.append(f"{os.path.basename(dest_path)} (Size mismatch)")
+                    mismatched_list.append(f"{os.path.basename(target_check_path)} (Size mismatch: expected {size}B, found {dest_size}B)")
                     continue
 
                 if part_hash and hashes_checked < hash_check_limit:
-                    dest_hash = engine._get_part_hash(dest_path, dest_size)
+                    dest_hash = engine._get_part_hash(target_check_path, dest_size)
                     hashes_checked += 1
                     if dest_hash and dest_hash != part_hash:
                         mismatched_count += 1
-                        mismatched_list.append(f"{os.path.basename(dest_path)} (Hash mismatch)")
+                        mismatched_list.append(f"{os.path.basename(target_check_path)} (Hash mismatch)")
                         continue
             except OSError:
                 missing_count += 1
-                missing_list.append(dest_path)
+                missing_list.append(f"{os.path.basename(source_path)} (Inaccessible file)")
                 continue
 
             verified_count += 1

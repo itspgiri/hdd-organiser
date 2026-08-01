@@ -87,16 +87,16 @@ class FileEngine:
             row = cursor.fetchone()
             return row is not None and row[0] == 'completed'
 
-    def record_copy(self, source_path: str, dest_path: str, size: int, mtime: float, part_hash: str = ""):
-        """Atomic write to checkpoint DB with size and hash indexing."""
-        if not part_hash and dest_path != "DUPLICATE_SKIPPED" and os.path.exists(dest_path):
+    def record_copy(self, source_path: str, dest_path: str, size: int, mtime: float, part_hash: str = "", status: str = "completed"):
+        """Atomic write to checkpoint DB with size, status, and hash indexing."""
+        if not part_hash and dest_path != "DUPLICATE_SKIPPED" and status == "completed" and os.path.exists(dest_path):
             part_hash = self._get_part_hash(dest_path, size)
         
         with self.lock:
             self.conn.execute('''
                 INSERT OR REPLACE INTO copies (source_path, dest_path, status, size, mtime, part_hash)
                 VALUES (?, ?, ?, ?, ?, ?)
-            ''', (source_path, dest_path, 'completed', size, mtime, part_hash))
+            ''', (source_path, dest_path, status, size, mtime, part_hash))
             self._uncommitted += 1
             if self._uncommitted >= 50:
                 self.conn.commit()
