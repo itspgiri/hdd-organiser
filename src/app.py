@@ -316,14 +316,20 @@ def run_organizer(source, dest, is_preview=False, dest_mode="new", excluded_proj
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
     active_api_instance = api
-    success = api.run(source, dest, is_preview=is_preview, dest_mode=dest_mode, excluded_projects=excluded_projects)
-    if hasattr(api, 'last_preview_summary'):
-        state.preview_summary = api.last_preview_summary
-    if success:
-        state.status = "complete"
-    else:
-        state.status = "error" if not api.cancelled else "cancelled"
-    active_api_instance = None
+    try:
+        success = api.run(source, dest, is_preview=is_preview, dest_mode=dest_mode, excluded_projects=excluded_projects)
+        if hasattr(api, 'last_preview_summary'):
+            state.preview_summary = api.last_preview_summary
+        if success:
+            state.status = "complete"
+        else:
+            state.status = "error" if not api.cancelled else "cancelled"
+    except Exception as e:
+        state.status = "error"
+        state.message = str(e)
+        log_cb(f"❌ Error: {str(e)}")
+    finally:
+        active_api_instance = None
 
 
 def start_ui():

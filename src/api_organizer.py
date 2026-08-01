@@ -133,14 +133,27 @@ class OrganizerAPI:
 
 
         # Execution
-        os.makedirs(dest_abs, exist_ok=True)
-        with open(os.path.join(dest_abs, ".metadata_never_index"), 'w') as f:
-            f.write("")
+        try:
+            os.makedirs(dest_abs, exist_ok=True)
+            with open(os.path.join(dest_abs, ".metadata_never_index"), 'w') as f:
+                f.write("")
 
-        # Automatic pre-transfer health check & auto-repair
-        self.auto_repair_if_needed(dest_abs)
+            # Automatic pre-transfer health check & auto-repair
+            self.auto_repair_if_needed(dest_abs)
 
-        engine = FileEngine(dest_abs)
+            engine = FileEngine(dest_abs)
+        except (OSError, IOError, sqlite3.OperationalError) as e:
+            if getattr(e, 'errno', None) == 30 or "Read-only" in str(e) or "readonly" in str(e).lower():
+                err_msg = (
+                    f"Read-only file system on destination path '{dest_abs}'. "
+                    "On macOS, external hard drives formatted as NTFS are read-only by default. "
+                    "Please choose a writeable destination, reformat the drive to exFAT/APFS, or install an NTFS write driver."
+                )
+            else:
+                err_msg = f"Cannot write to destination folder '{dest_abs}': {str(e)}"
+            self.log_cb(f"❌ Error: {err_msg}")
+            return False
+
         dates = DateExtractor(categorizer)
         engine.start_caffeinate()
 

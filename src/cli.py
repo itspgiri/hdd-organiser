@@ -112,12 +112,23 @@ def run_cli():
     # -------- Execution Phase --------
     print_header("Executing File Transfers")
     
-    # 1. Spotlight Suppression
-    os.makedirs(dest_abs, exist_ok=True)
-    with open(os.path.join(dest_abs, ".metadata_never_index"), 'w') as f:
-        f.write("")
+    # 1. Spotlight Suppression & Write Check
+    try:
+        os.makedirs(dest_abs, exist_ok=True)
+        with open(os.path.join(dest_abs, ".metadata_never_index"), 'w') as f:
+            f.write("")
+        engine = FileEngine(dest_abs)
+    except (OSError, IOError, Exception) as e:
+        if getattr(e, 'errno', None) == 30 or "Read-only" in str(e) or "readonly" in str(e).lower():
+            print_error(
+                f"Read-only file system error on '{dest_abs}'.\n"
+                "On macOS, external hard drives formatted as NTFS are read-only by default.\n"
+                "Please choose a writeable destination drive, reformat the drive to exFAT/APFS, or install an NTFS write driver."
+            )
+        else:
+            print_error(f"Cannot write to destination directory '{dest_abs}': {str(e)}")
+        return
 
-    engine = FileEngine(dest_abs)
     dates = DateExtractor(categorizer)
     engine.start_caffeinate()
     
