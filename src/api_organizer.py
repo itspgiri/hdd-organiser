@@ -271,7 +271,13 @@ class OrganizerAPI:
                             engine.set_finder_tag(final_dest, "5", "To Review")
                         engine.record_copy(file_path, final_dest, size, mtime, part_hash)
                 except Exception as file_err:
-                    self.log_cb(f"Warning: Skipped problem file {filename}: {str(file_err)}")
+                    err_msg = str(file_err)
+                    if "Errno 27" in err_msg or "File too large" in err_msg:
+                        self.log_cb(f"⚠️ Skipped large file '{filename}': Target USB drive is formatted as FAT32 which has a 4 GB single file limit. Format drive as ExFAT or APFS to store files > 4 GB.")
+                    elif "Errno 60" in err_msg or "timed out" in err_msg:
+                        self.log_cb(f"☁️ Skipped cloud file '{filename}': File is stored in iCloud and not downloaded to your Mac yet. Click the download cloud icon in Finder next to this file, then re-run transfer.")
+                    else:
+                        self.log_cb(f"Warning: Skipped problem file {filename}: {err_msg}")
                 finally:
                     if final_dest:
                         engine.release_reservation(final_dest)
