@@ -18,6 +18,33 @@ try:
 except Exception:
     _HAS_NATIVE_COPYFILE = False
 
+
+def restore_timestamps(source_path: str, target_path: str):
+    """Best-effort copy of access/modification times from source to target.
+
+    exFAT / FAT32 volumes reject extended attributes and ACLs (raising Errno 22),
+    which is why the data-only shutil.copyfile is used as the transfer fallback.
+    Those same volumes *do* accept utime, so timestamps are restored separately
+    here instead of being silently reset to the time of the copy.
+    """
+    try:
+        st = os.stat(source_path)
+        os.utime(target_path, (st.st_atime, st.st_mtime))
+    except (OSError, ValueError):
+        pass
+
+
+def safe_copy(source_path: str, target_path: str):
+    """exFAT-safe data copy that still preserves original file timestamps.
+
+    Drop-in replacement for shutil.copyfile / shutil.copy2 usable as a
+    shutil.copytree copy_function.
+    """
+    shutil.copyfile(source_path, target_path)
+    restore_timestamps(source_path, target_path)
+    return target_path
+
+
 class FileEngine:
     def __init__(self, dest_root: str):
         self.dest_root = dest_root
@@ -230,6 +257,10 @@ class FileEngine:
                     shutil.copyfile(source_path, tmp_path)
                 except Exception:
                     shutil.copy2(source_path, tmp_path)
+                # copyfile/copy2 fallbacks transfer bytes only on exFAT, so the
+                # original mtime must be re-applied or the archived copy would
+                # be stamped with today's date and mis-sorted by DateExtractor.
+                restore_timestamps(source_path, tmp_path)
 
             if os.path.exists(tmp_path):
                 tmp_size = os.path.getsize(tmp_path)

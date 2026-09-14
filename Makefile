@@ -3,7 +3,7 @@
 PYTHON := .venv/bin/python3
 PIP := .venv/bin/pip
 
-.PHONY: all setup run cli preview copy clean help
+.PHONY: all setup run cli preview copy test clean help
 
 help:
 	@echo "Drive Organizer Commands:"
@@ -12,6 +12,7 @@ help:
 	@echo "  make cli          - Launch Interactive CLI mode"
 	@echo "  make preview      - Run dry-run preview (Usage: make preview SOURCE=/path DEST=/path)"
 	@echo "  make copy         - Run full copy transfer (Usage: make copy SOURCE=/path DEST=/path)"
+	@echo "  make test         - Run the regression test suite"
 	@echo "  make clean        - Remove temporary files, caches, and pyc files"
 
 setup:
@@ -41,6 +42,9 @@ copy: setup
 		exit 1; \
 	fi
 	@$(PYTHON) main.py --cli "$(SOURCE)" "$(DEST)" --copy
+
+test: setup
+	@$(PYTHON) -m unittest discover -s tests -v
 
 clean:
 	@echo "Cleaning up Python cache files..."

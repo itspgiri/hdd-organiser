@@ -10,7 +10,7 @@ from typing import Callable, Dict, Tuple, Set, List, Optional
 from .categorizer import Categorizer
 from .scanner import Scanner
 from .dates import DateExtractor
-from .file_ops import FileEngine
+from .file_ops import FileEngine, safe_copy, restore_timestamps
 
 class OrganizerAPI:
     def __init__(self, config_path: str, log_cb: Callable[[str], None], progress_cb: Callable[[int, int, str], None]):
@@ -194,7 +194,7 @@ class OrganizerAPI:
                         proj,
                         dest_proj,
                         dirs_exist_ok=True,
-                        copy_function=shutil.copyfile,
+                        copy_function=safe_copy,
                         ignore_dangling_symlinks=True,
                         ignore=shutil.ignore_patterns(
                             "node_modules", ".next", ".firebase", ".git", ".venv",
@@ -432,7 +432,7 @@ class OrganizerAPI:
                         try:
                             shutil.move(file_path, final_dest)
                         except OSError:
-                            shutil.copyfile(file_path, final_dest)
+                            safe_copy(file_path, final_dest)
                             try:
                                 os.remove(file_path)
                             except OSError:

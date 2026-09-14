@@ -9,7 +9,7 @@ from .utils import print_header, print_success, print_error, print_info, print_w
 from .categorizer import Categorizer
 from .scanner import Scanner
 from .dates import DateExtractor
-from .file_ops import FileEngine
+from .file_ops import FileEngine, safe_copy
 
 def run_cli():
     print_header("Drive Organizer 🚀")
@@ -160,7 +160,7 @@ def run_cli():
                         proj,
                         dest_proj,
                         dirs_exist_ok=True,
-                        copy_function=shutil.copyfile,
+                        copy_function=safe_copy,
                         ignore_dangling_symlinks=True,
                         ignore=shutil.ignore_patterns(
                             "node_modules", ".next", ".firebase", ".git", ".venv",
