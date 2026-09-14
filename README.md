@@ -14,7 +14,7 @@
 | **8-Layer Metadata Pipeline** | Chronological media and document date extraction. | EXIF DateTimeOriginal ➔ EXIF Digitized ➔ Image DateTime ➔ GPS UTC ➔ **MP4/MOV QuickTime `mvhd` Atom** ➔ **PDF `CreationDate` Metadata** ➔ Filename Regex ➔ macOS Birthtime. |
 | **Chronological Screenshot Sorting** | Isolates screenshots into `Media/Screenshots/YYYY/MonthName/`. | Multi-OS screenshot regex matching (macOS, iOS, Windows, Android). |
 | **Apple Live Photo Pairing** | Pairs `.heic` photos and `.mov` video clips together. | Pre-indexes HEIC dates using fast memory tuple keys `(dir_name, name_only)`. |
-| **Intact Code Repository Protection** | Detects development repositories (Git, Node, Python, Rust). | Preserves code folders 100% intact under `Code/project_name/`. Includes Dry-Run Preview Inspector drawer. |
+| **Intact Code Repository Protection** | Detects development repositories (Git, Node, Python, Rust). | Preserves code folders 100% intact under `Code/project_name/`, **including `.git` history**. Build artefacts (`node_modules`, `dist`, `__pycache__`, …) are still skipped. Includes Dry-Run Preview Inspector drawer. |
 | **Multi-Source Folder Selection** | Select multiple messy source folders at once. | Aggregates files across multiple folders or comma-separated paths (`/Volumes/HDD1, /Volumes/HDD2`). |
 | **Real-Time Progress & ETA** | Live progress bar with estimated time remaining. | Speed-sampled calculation (`45% • 1,912/4,250 • ⏳ ~02m 14s remaining`) with audio completion chime (`afplay`). |
 | **System & Drive Protection** | Ultra-gentle on external HDDs and Mac system. | Filters OS junk (`.DS_Store`, `._*`), suppresses Spotlight indexing (`.metadata_never_index`), and blocks system sleep (`caffeinate`). |
@@ -169,3 +169,8 @@ If macOS does not automatically show your external HDD:
 * **HDD Physical Protection**: Safe worker thread limits + SQLite WAL batching keep mechanical HDD read heads cool and quiet.
 * **System Sleep Prevention**: Uses `caffeinate` to keep your Mac awake during long transfers.
 * **Spotlight Thrash Protection**: Writes `.metadata_never_index` to prevent Spotlight indexers from thrashing your HDD.
+* **Byte-Exact Duplicate Detection**: A file is only ever skipped as a duplicate after a full byte-for-byte comparison. Sampled hashes are used to find *candidates*, never to make the final call.
+* **Ownership-Aware Repair**: Repair only deletes a destination file when exactly one database record claims it and no successful copy owns that path, so a healthy file can never be removed on behalf of a failed one.
+* **Authenticated Local API**: The local server mints a fresh token per launch; every `/api/` route requires it, so no other page or process on your Mac can drive the organizer.
+* **Off-Source Staging**: Google Takeout archives are unzipped to the destination (or the system temp dir), never onto the source drive, and staged copies are cleaned up after a successful run.
+* **Free Space Pre-Flight**: A fresh run that cannot possibly fit on the destination is refused before a single file is copied. Resumed runs warn instead, since most data may already be there.

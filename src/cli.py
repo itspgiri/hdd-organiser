@@ -9,7 +9,8 @@ from .utils import print_header, print_success, print_error, print_info, print_w
 from .categorizer import Categorizer
 from .scanner import Scanner
 from .dates import DateExtractor
-from .file_ops import FileEngine, safe_copy
+from .file_ops import FileEngine, safe_copy, copy_project_intact
+from .api_organizer import OrganizerAPI
 
 def run_cli():
     print_header("Drive Organizer 🚀")
@@ -44,9 +45,12 @@ def run_cli():
 
     source_abs = os.path.abspath(source)
     dest_abs = os.path.abspath(dest)
-    
-    if dest_abs.startswith(source_abs):
-        print_error("Safety Error: Destination folder cannot be inside the Source folder!")
+
+    # Shared with the GUI: realpath+commonpath, so symlinks and sibling names
+    # like /data vs /data-backup are handled correctly.
+    path_error = OrganizerAPI.validate_paths(source_abs, dest_abs)
+    if path_error:
+        print_error(path_error)
         return
 
     print_success(f"Source: {source_abs}")
@@ -64,7 +68,8 @@ def run_cli():
         
     print_info("Loading configurations...")
     categorizer = Categorizer(config_path)
-    scanner = Scanner(categorizer)
+    # Stage unzipped archives on the destination, never on the source drive.
+    scanner = Scanner(categorizer, staging_root=os.path.join(dest_abs, ".organizer_staging"))
     
     print_header("Scan & Preview")
     print_info(f"Scanning {source_abs} for files... (This may take a minute)")
@@ -155,34 +160,9 @@ def run_cli():
                     while os.path.exists(os.path.join(dest_abs, "Code", f"{proj_name}_{c}")):
                         c += 1
                     dest_proj = os.path.join(dest_abs, "Code", f"{proj_name}_{c}")
-                try:
-                    shutil.copytree(
-                        proj,
-                        dest_proj,
-                        dirs_exist_ok=True,
-                        copy_function=safe_copy,
-                        ignore_dangling_symlinks=True,
-                        ignore=shutil.ignore_patterns(
-                            "node_modules", ".next", ".firebase", ".git", ".venv",
-                            "venv", "__pycache__", ".turbo", "dist", "build",
-                            ".cache", "target", ".gradle", ".cargo", ".DS_Store"
-                        )
-                    )
-                except Exception:
-                    try:
-                        shutil.copytree(
-                            proj,
-                            dest_proj,
-                            dirs_exist_ok=True,
-                            ignore_dangling_symlinks=True,
-                            ignore=shutil.ignore_patterns(
-                                "node_modules", ".next", ".firebase", ".git", ".venv",
-                                "venv", "__pycache__", ".turbo", "dist", "build",
-                                ".cache", "target", ".gradle", ".cargo", ".DS_Store"
-                            )
-                        )
-                    except Exception as proj_err:
-                        print_warning(f"Issue copying code project {proj_name}: {str(proj_err)}")
+                ok, proj_err = copy_project_intact(proj, dest_proj)
+                if not ok:
+                    print_warning(f"Issue copying code project {proj_name}: {proj_err}")
 
 
                 progress.advance(proj_task)
@@ -239,7 +219,9 @@ def run_cli():
                         engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime, part_hash)
                     else:
                         engine.copy_file(file_path, final_dest)
-                        if "Unsorted" in rel_dest:
+                        # Component test, not substring, so a file named
+                        # "Unsorted ideas.txt" isn't tagged To Review.
+                        if "Unsorted" in rel_dest.split(os.sep)[:-1]:
                             engine.set_finder_tag(final_dest, "5", "To Review")
                         engine.record_copy(file_path, final_dest, size, mtime, part_hash)
                 except Exception as file_err:
@@ -259,17 +241,24 @@ def run_cli():
 
 def _macos_choose_folder(prompt_text: str) -> str:
     """Uses AppleScript to open a native macOS folder selection dialog."""
-    script = f'''
-    try
-        tell application (path to frontmost application as text)
-            set theFolder to choose folder with prompt "{prompt_text}"
-            POSIX path of theFolder
-        end tell
-    on error number -128
-        return ""
-    end try
+    # Prompt goes through argv, not string interpolation, so it cannot be
+    # evaluated as AppleScript.
+    script = '''
+    on run argv
+        try
+            tell application (path to frontmost application as text)
+                set theFolder to choose folder with prompt (item 1 of argv)
+                POSIX path of theFolder
+            end tell
+        on error number -128
+            return ""
+        end try
+    end run
     '''
-    result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+    result = subprocess.run(
+        ['osascript', '-e', script, prompt_text],
+        capture_output=True, text=True
+    )
     return result.stdout.strip()
 
 if __name__ == "__main__":

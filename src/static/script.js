@@ -623,7 +623,7 @@ async function openDestinationInFinder() {
 function downloadAuditReport() {
     const dest = document.getElementById('dest-path').value;
     if (!dest) return;
-    window.location.href = `/api/export_csv?dest=${encodeURIComponent(dest)}`;
+    window.location.href = `/api/export_csv?dest=${encodeURIComponent(dest)}&token=${encodeURIComponent(window.API_TOKEN)}`;
 }
 
 async function runVerificationChecker() {
@@ -769,7 +769,7 @@ async function loadHistoryView(shouldNavigate = true) {
 
 function downloadHistoryCSV(destPath) {
     if (!destPath) return;
-    window.location.href = `/api/export_csv?dest=${encodeURIComponent(destPath)}`;
+    window.location.href = `/api/export_csv?dest=${encodeURIComponent(destPath)}&token=${encodeURIComponent(window.API_TOKEN)}`;
 }
 
 async function verifyHistoryRun(destPath) {

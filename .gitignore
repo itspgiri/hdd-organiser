@@ -5,3 +5,5 @@ __pycache__/
 *.db
 .organizer_checkpoint.db
 test_env/
+run_history.json
+.organizer_staging/

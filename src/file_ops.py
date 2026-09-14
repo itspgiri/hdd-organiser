@@ -1,9 +1,12 @@
 import os
+import atexit
+import filecmp
 import shutil
 import sqlite3
 import hashlib
 import subprocess
 import threading
+import time
 from typing import Optional, Tuple
 import xattr # Used for macOS Finder tags
 
@@ -43,6 +46,70 @@ def safe_copy(source_path: str, target_path: str):
     shutil.copyfile(source_path, target_path)
     restore_timestamps(source_path, target_path)
     return target_path
+
+
+def files_are_identical(path_a: str, path_b: str) -> bool:
+    """Byte-for-byte comparison of two files.
+
+    The part-hash below only samples the first and last 1MB of a file, so it
+    cannot prove two files are the same. Any two files that share a size and
+    those two sampled megabytes collide - re-encoded videos, disk images,
+    padded archives and same-camera clips all do this in practice. Because a
+    positive duplicate verdict means the file is *never copied* (and is then
+    offered up for trashing), the sampled hash is only ever used to shortlist
+    candidates; this function makes the final call.
+    """
+    try:
+        if os.path.getsize(path_a) != os.path.getsize(path_b):
+            return False
+        return filecmp.cmp(path_a, path_b, shallow=False)
+    except OSError:
+        return False
+
+
+# Regenerable build output and dependency caches - not worth the transfer time
+# and usually far larger than the project itself.
+#
+# NOTE: .git is deliberately NOT in this list. It used to be, which meant a
+# repository advertised as "preserved 100% intact" arrived with its entire
+# version history stripped out - normally the most valuable part of an
+# archived project.
+PROJECT_IGNORE_PATTERNS = (
+    "node_modules", ".next", ".firebase", ".venv", "venv", "__pycache__",
+    ".turbo", "dist", "build", ".cache", "target", ".gradle", ".cargo",
+    ".DS_Store",
+)
+
+
+def copy_project_intact(source_dir: str, dest_dir: str) -> Tuple[bool, str]:
+    """Copies a detected code project, preserving its structure and history.
+
+    Tries the timestamp-preserving exFAT-safe copy first and falls back to
+    shutil's default copy function if the volume rejects it.
+
+    Returns (ok, error_message).
+    """
+    ignore = shutil.ignore_patterns(*PROJECT_IGNORE_PATTERNS)
+    try:
+        shutil.copytree(
+            source_dir, dest_dir,
+            dirs_exist_ok=True,
+            copy_function=safe_copy,
+            ignore_dangling_symlinks=True,
+            ignore=ignore
+        )
+        return True, ""
+    except Exception:
+        try:
+            shutil.copytree(
+                source_dir, dest_dir,
+                dirs_exist_ok=True,
+                ignore_dangling_symlinks=True,
+                ignore=ignore
+            )
+            return True, ""
+        except Exception as err:
+            return False, str(err)
 
 
 class FileEngine:
@@ -100,12 +167,28 @@ class FileEngine:
         """Prevents macOS from sleeping during long HDD transfers."""
         try:
             self.caffeinate_process = subprocess.Popen(["caffeinate", "-dims"])
+            # Safety net: if the app crashes or is killed before stop_caffeinate
+            # runs, the orphaned caffeinate would otherwise keep the Mac awake
+            # indefinitely.
+            atexit.register(self.stop_caffeinate)
         except Exception:
             pass
 
     def stop_caffeinate(self):
-        if self.caffeinate_process:
-            self.caffeinate_process.terminate()
+        proc = self.caffeinate_process
+        if not proc:
+            return
+        self.caffeinate_process = None
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+            # Reap the child so it does not linger as a zombie.
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
     def is_already_copied(self, source_path: str) -> bool:
         """Check if file was already successfully copied in a previous run."""
@@ -158,12 +241,24 @@ class FileEngine:
 
     def is_content_duplicate(self, source_path: str, size: int) -> Tuple[bool, str]:
         """
-        Checks if an identical file (same size & part_hash) has already been copied anywhere in dest.
+        Checks if an identical file has already been copied anywhere in dest.
         Returns (is_dup, part_hash).
+
+        The size + part_hash lookup is only a *shortlist*: any candidate it
+        finds is confirmed with a full byte-for-byte comparison before the
+        source file is written off as a duplicate. Skipping a file is
+        irreversible from the user's point of view (it never reaches the
+        destination and the duplicates UI then offers to trash the source),
+        so a sampled hash is not a strong enough basis on its own.
         """
         src_hash = ""
         with self.lock:
-            cursor = self.conn.execute('SELECT dest_path, part_hash FROM copies WHERE size = ? AND status = "completed" AND dest_path != "DUPLICATE_SKIPPED"', (size,))
+            cursor = self.conn.execute(
+                "SELECT dest_path, part_hash FROM copies "
+                "WHERE size = ? AND status = 'completed' "
+                "AND dest_path NOT IN ('DUPLICATE_SKIPPED', '')",
+                (size,)
+            )
             rows = cursor.fetchall()
         if not rows:
             return False, ""
@@ -173,13 +268,19 @@ class FileEngine:
             return False, ""
 
         for dest_path, db_hash in rows:
-            if db_hash == src_hash and db_hash != "":
+            # A recorded duplicate is only real if the file is still there to
+            # compare against. A missing destination file means the copy was
+            # lost, so the source must be re-copied rather than skipped.
+            if not dest_path or not os.path.exists(dest_path):
+                continue
+
+            is_candidate = bool(db_hash) and db_hash == src_hash
+            if not is_candidate and not db_hash:
+                # Legacy row with no recorded hash: derive it from the file.
+                is_candidate = self._get_part_hash(dest_path, size) == src_hash
+
+            if is_candidate and files_are_identical(source_path, dest_path):
                 return True, src_hash
-            # If db_hash is missing, compute it from dest_path if file exists
-            if not db_hash and os.path.exists(dest_path):
-                calc_hash = self._get_part_hash(dest_path, size)
-                if calc_hash == src_hash and calc_hash != "":
-                    return True, src_hash
 
         return False, src_hash
 
@@ -202,24 +303,42 @@ class FileEngine:
 
         self.ensure_dir(os.path.dirname(base_dest))
 
-        with self.reserved_lock:
-            def is_path_busy(p: str) -> bool:
-                return os.path.exists(p) or os.path.exists(p + ".tmp") or p in self.reserved_paths
+        def is_path_busy(p: str) -> bool:
+            return os.path.exists(p) or os.path.exists(p + ".tmp") or p in self.reserved_paths
 
-            # If target path is free, reserve it immediately for this thread
-            if not is_path_busy(base_dest):
-                self.reserved_paths.add(base_dest)
-                return base_dest, src_hash
+        # If the target path is free, reserve it immediately for this thread.
+        #
+        # If another worker currently holds the reservation, wait for it rather
+        # than immediately falling through to a "name_1" collision name: two
+        # identical files with the same name are extremely common (the same
+        # photo in two folders), and racing past each other here defeated
+        # deduplication entirely. Once the other thread finishes, the file is
+        # on disk and the identical-content check below can do its job.
+        deadline = time.time() + 300
+        while True:
+            with self.reserved_lock:
+                if not is_path_busy(base_dest):
+                    self.reserved_paths.add(base_dest)
+                    return base_dest, src_hash
+                held_by_other_thread = (
+                    base_dest in self.reserved_paths
+                    and not os.path.exists(base_dest)
+                    and not os.path.exists(base_dest + ".tmp")
+                )
+            if held_by_other_thread and time.time() < deadline:
+                time.sleep(0.05)
+                continue
+            break
 
-        # Base dest exists! Check if destination file is an identical duplicate
+        # Base dest exists! Check if the destination file is genuinely the same
+        # file. Confirmed byte-for-byte: a sampled-hash match is not enough to
+        # justify never copying the source (see files_are_identical).
         if os.path.exists(base_dest):
             try:
-                dest_size = os.path.getsize(base_dest)
-                if dest_size == source_size:
+                if os.path.getsize(base_dest) == source_size:
                     if not src_hash:
                         src_hash = self._get_part_hash(source_path, source_size)
-                    dst_hash = self._get_part_hash(base_dest, dest_size)
-                    if src_hash == dst_hash and src_hash != "":
+                    if files_are_identical(source_path, base_dest):
                         # Identical file! Skip copying.
                         return None, src_hash
             except OSError:

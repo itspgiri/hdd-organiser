@@ -232,6 +232,24 @@
         </div>
     </main>
 
+    <script>
+      // Injected fresh per launch by the Flask app. Wrapping fetch once here,
+      // before script.js loads, means every existing API call site picks up the
+      // auth token without needing to be touched individually.
+      window.API_TOKEN = "{{ api_token }}";
+      (function () {
+        const rawFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {
+          const url = typeof input === "string" ? input : (input && input.url) || "";
+          if (url.startsWith("/api/")) {
+            init = init || {};
+            init.headers = new Headers(init.headers || {});
+            init.headers.set("X-Organizer-Token", window.API_TOKEN);
+          }
+          return rawFetch(input, init);
+        };
+      })();
+    </script>
     <script src="/static/script.js"></script>
 </body>
 </html>

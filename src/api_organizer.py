@@ -10,7 +10,7 @@ from typing import Callable, Dict, Tuple, Set, List, Optional
 from .categorizer import Categorizer
 from .scanner import Scanner
 from .dates import DateExtractor
-from .file_ops import FileEngine, safe_copy, restore_timestamps
+from .file_ops import FileEngine, safe_copy, restore_timestamps, copy_project_intact
 
 class OrganizerAPI:
     def __init__(self, config_path: str, log_cb: Callable[[str], None], progress_cb: Callable[[int, int, str], None]):
@@ -22,6 +22,44 @@ class OrganizerAPI:
     def cancel(self):
         self.cancelled = True
         
+    @staticmethod
+    def _split_sources(source_abs) -> List[str]:
+        """Normalises the source argument (list, or comma-separated string)."""
+        if isinstance(source_abs, list):
+            return [str(p).strip() for p in source_abs if str(p).strip()]
+        return [p.strip() for p in str(source_abs).split(',') if p.strip()]
+
+    @staticmethod
+    def validate_paths(source_abs, dest_abs: str) -> Optional[str]:
+        """Returns an error message if the source/destination pair is unsafe.
+
+        Compares resolved real paths rather than raw strings: the old
+        `dest.startswith(source)` test both rejected innocent siblings
+        (/Volumes/Photos_Backup next to /Volumes/Photos) and could be walked
+        around with symlinks or trailing separators. The GUI had no check at
+        all, so a destination nested inside the source was accepted.
+        """
+        dest_real = os.path.realpath(dest_abs)
+        for src in OrganizerAPI._split_sources(source_abs):
+            src_real = os.path.realpath(src)
+            if src_real == dest_real:
+                return "Safety Error: Source and Destination are the same folder."
+            try:
+                if os.path.commonpath([dest_real, src_real]) == src_real:
+                    return (
+                        f"Safety Error: Destination '{dest_real}' is inside source "
+                        f"'{src_real}'. Choose a destination outside the source folder."
+                    )
+                if os.path.commonpath([dest_real, src_real]) == dest_real:
+                    return (
+                        f"Safety Error: Source '{src_real}' is inside destination "
+                        f"'{dest_real}'. Choose a destination outside the source folder."
+                    )
+            except ValueError:
+                # Different volumes - no containment possible.
+                continue
+        return None
+
     def run(self, source_abs: str, dest_abs: str, is_preview: bool = False, dest_mode: str = "new", excluded_projects: list = None):
         self.cancelled = False
         mode_str = "Preview (Dry Run)" if is_preview else "Full Transfer"
@@ -34,8 +72,16 @@ class OrganizerAPI:
             self.log_cb("Error: config.json is missing!")
             return False
 
+        path_error = self.validate_paths(source_abs, dest_abs)
+        if path_error:
+            self.log_cb(f"❌ {path_error}")
+            return False
+
         categorizer = Categorizer(self.config_path)
-        scanner = Scanner(categorizer)
+        # Extract archives into a staging area on the destination volume, never
+        # onto the source drive.
+        staging_root = os.path.join(dest_abs, ".organizer_staging")
+        scanner = Scanner(categorizer, staging_root=staging_root)
         
         self.log_cb(f"Scanning {source_abs} for files...")
         excluded_set = set(excluded_projects or [])
@@ -71,13 +117,28 @@ class OrganizerAPI:
             self.log_cb(f"Safely ignored {scanner.ignored_garbage_count} system/garbage files.")
 
         free_space_str = "Unknown"
+        free_bytes = None
         try:
             dest_parent = dest_abs if os.path.exists(dest_abs) else os.path.dirname(dest_abs)
             free_bytes = shutil.disk_usage(dest_parent).free
             free_space_str = format_size(free_bytes)
             self.log_cb(f"Destination Drive Free Space: {free_space_str}")
-        except Exception:
+        except OSError:
             pass
+
+        # Hard block: refuse a fresh run that cannot possibly fit.
+        # On a resume the destination may already hold most of the data, so warn only.
+        if free_bytes is not None and total_bytes > free_bytes and not is_preview:
+            is_resume = os.path.exists(os.path.join(dest_abs, ".organizer_checkpoint.db"))
+            msg = (
+                f"Not enough free space on destination: need {size_str}, "
+                f"only {free_space_str} available."
+            )
+            if is_resume:
+                self.log_cb(f"⚠️  {msg} Continuing because this looks like a resumed transfer.")
+            else:
+                self.log_cb(f"❌ Error: {msg}")
+                return False
 
         project_details = [{"name": os.path.basename(p), "path": p} for p in scanner.projects_found]
         self.last_preview_summary = {
@@ -189,34 +250,9 @@ class OrganizerAPI:
                     dest_proj = os.path.join(dest_abs, "Code", f"{proj_name}_{c}")
 
                 self.progress_cb(i + 1, total_items, f"Copying project: {os.path.basename(dest_proj)}")
-                try:
-                    shutil.copytree(
-                        proj,
-                        dest_proj,
-                        dirs_exist_ok=True,
-                        copy_function=safe_copy,
-                        ignore_dangling_symlinks=True,
-                        ignore=shutil.ignore_patterns(
-                            "node_modules", ".next", ".firebase", ".git", ".venv",
-                            "venv", "__pycache__", ".turbo", "dist", "build",
-                            ".cache", "target", ".gradle", ".cargo", ".DS_Store"
-                        )
-                    )
-                except Exception:
-                    try:
-                        shutil.copytree(
-                            proj,
-                            dest_proj,
-                            dirs_exist_ok=True,
-                            ignore_dangling_symlinks=True,
-                            ignore=shutil.ignore_patterns(
-                                "node_modules", ".next", ".firebase", ".git", ".venv",
-                                "venv", "__pycache__", ".turbo", "dist", "build",
-                                ".cache", "target", ".gradle", ".cargo", ".DS_Store"
-                            )
-                        )
-                    except Exception as proj_err:
-                        self.log_cb(f"Warning: Issue copying code project {proj_name}: {str(proj_err)}")
+                ok, proj_err = copy_project_intact(proj, dest_proj)
+                if not ok:
+                    self.log_cb(f"Warning: Issue copying code project {proj_name}: {proj_err}")
 
 
 
@@ -280,7 +316,9 @@ class OrganizerAPI:
                         engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime, part_hash)
                     else:
                         engine.copy_file(file_path, final_dest)
-                        if "Unsorted" in rel_dest:
+                        # Component test, not substring: a file literally named
+                        # "Unsorted ideas.txt" must not be tagged To Review.
+                        if "Unsorted" in rel_dest.split(os.sep)[:-1]:
                             engine.set_finder_tag(final_dest, "5", "To Review")
                         engine.record_copy(file_path, final_dest, size, mtime, part_hash)
                 except Exception as file_err:
@@ -295,9 +333,11 @@ class OrganizerAPI:
                         reason = err_msg
                         self.log_cb(f"Warning: Skipped problem file {filename}: {err_msg}")
 
-                    # Record failed file status in database so integrity check and re-sync track it properly
-                    failed_dest = final_dest if final_dest else target_base
-                    engine.record_copy(file_path, failed_dest, size, mtime, part_hash="", status=f"failed: {reason}")
+                    # Record the failed file so integrity check / re-sync track it.
+                    # IMPORTANT: never record target_base here. Nothing was written to
+                    # it, and another file may legitimately own that path -- recording
+                    # it would make repair_transfer delete a healthy file.
+                    engine.record_copy(file_path, final_dest or "", size, mtime, part_hash="", status=f"failed: {reason}")
                 finally:
                     if final_dest:
                         engine.release_reservation(final_dest)
@@ -331,7 +371,16 @@ class OrganizerAPI:
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 list(executor.map(process_single_file, scanner.files_to_process))
-                
+
+            # executor.map always drains the whole iterable; once cancelled the
+            # workers just no-op, so the flag must be re-checked here or a
+            # cancelled run would be reported as a success.
+            if self.cancelled:
+                self.log_cb("Operation cancelled by user. Progress saved.")
+                return False
+
+            scanner.cleanup_staging()
+
             self.progress_cb(total_items, total_items, "Complete")
             self.log_cb("All done! 100% of files organized safely.")
 
@@ -389,7 +438,14 @@ class OrganizerAPI:
         Dissolves a project folder in Code/ and re-sorts all its contents into
         Media, Documents, etc.
         """
-        if not os.path.exists(project_folder_path):
+        # This path arrives from an HTTP request and this function ends in an
+        # rmtree, so confine it to a real subfolder of <dest>/Code.
+        code_root = os.path.realpath(os.path.join(dest_abs, "Code"))
+        target = os.path.realpath(project_folder_path)
+        if target == code_root or os.path.commonpath([code_root, target]) != code_root:
+            return False, "Refused: project folder must be inside the destination's Code/ folder."
+
+        if not os.path.isdir(project_folder_path):
             return False, "Folder does not exist"
 
         categorizer = Categorizer(self.config_path)
@@ -442,9 +498,21 @@ class OrganizerAPI:
                     if final_dest:
                         engine.release_reservation(final_dest)
 
-            # Remove empty directory tree
-            shutil.rmtree(project_folder_path, ignore_errors=True)
+            # Only remove the folder if nothing is left in it. An unconditional
+            # rmtree would destroy any file that failed to move.
+            leftovers = []
+            for root, _dirs, files in os.walk(project_folder_path):
+                for f in files:
+                    if f != ".DS_Store":
+                        leftovers.append(os.path.join(root, f))
 
+            if leftovers:
+                return True, (
+                    f"Dissolved, but {len(leftovers)} file(s) could not be moved and were "
+                    f"left in place at {project_folder_path}. Nothing was deleted."
+                )
+
+            shutil.rmtree(project_folder_path, ignore_errors=True)
             return True, "Project dissolved and files re-sorted successfully!"
         except Exception as e:
             return False, str(e)
@@ -537,6 +605,8 @@ class OrganizerAPI:
         mismatched_list = []
         hash_check_limit = 10000 # Check SHA-256 hashes for up to 10,000 files for comprehensive verification
         hashes_checked = 0
+        # Built lazily, at most once, only if some file is not where we expect.
+        dest_index: Optional[Dict[str, List[str]]] = None
 
         for source_path, dest_path, status, size, part_hash in rows:
             if dest_path == "DUPLICATE_SKIPPED":
@@ -549,17 +619,33 @@ class OrganizerAPI:
                 missing_list.append(f"{os.path.basename(source_path)} ({reason})")
                 continue
 
-            # Path resolution across volume mounts
+            # Path resolution across volume mounts.
+            # The old code re-walked the whole drive for every missing file and
+            # accepted the first basename match, which could "verify" a totally
+            # unrelated file. Build the index once and demand size+hash agreement.
             target_check_path = dest_path
             if not os.path.exists(target_check_path):
-                # Try finding file relative to dest_abs
-                fn = os.path.basename(dest_path)
+                if dest_index is None:
+                    dest_index = {}
+                    for root, _dirs, files in os.walk(dest_abs):
+                        for f in files:
+                            dest_index.setdefault(f, []).append(os.path.join(root, f))
+
                 found = False
-                for root, dirs, files in os.walk(dest_abs):
-                    if fn in files:
-                        target_check_path = os.path.join(root, fn)
-                        found = True
-                        break
+                for cand in dest_index.get(os.path.basename(dest_path), []):
+                    try:
+                        if os.path.getsize(cand) != size:
+                            continue
+                        if part_hash:
+                            cand_hash = engine._get_part_hash(cand, size)
+                            if cand_hash and cand_hash != part_hash:
+                                continue
+                    except OSError:
+                        continue
+                    target_check_path = cand
+                    found = True
+                    break
+
                 if not found:
                     missing_count += 1
                     missing_list.append(f"{os.path.basename(source_path)} (File missing on destination)")
@@ -604,8 +690,15 @@ class OrganizerAPI:
 
     def repair_transfer(self, dest_abs: str) -> dict:
         """
-        Removes invalid, missing, or mismatched entries from checkpoint DB and deletes corrupted destination files,
-        allowing a subsequent transfer run to automatically re-copy only the failed files.
+        Clears invalid/missing/mismatched entries from the checkpoint DB so a
+        later run re-copies them.
+
+        Deleting a destination file here is dangerous: a bad row's dest_path may
+        be a path that some *other*, perfectly healthy file legitimately owns.
+        So a file is only ever deleted when all of the following hold:
+          1. exactly one DB row claims that path,
+          2. no successfully-completed row claims that path,
+          3. the path really lives inside dest_abs.
         """
         db_path = os.path.join(dest_abs, ".organizer_checkpoint.db")
         if not os.path.exists(db_path):
@@ -613,43 +706,89 @@ class OrganizerAPI:
 
         try:
             conn = sqlite3.connect(db_path, timeout=30.0)
-            cursor = conn.execute("SELECT source_path, dest_path, size, part_hash FROM copies")
+            cursor = conn.execute("SELECT source_path, dest_path, size, part_hash, status FROM copies")
             rows = cursor.fetchall()
             conn.close()
         except Exception as db_err:
             return {"success": False, "error": f"Database error: {str(db_err)}"}
 
+        dest_real = os.path.realpath(dest_abs)
+
+        def is_inside_dest(p: str) -> bool:
+            if not p:
+                return False
+            try:
+                pr = os.path.realpath(p)
+                return pr != dest_real and os.path.commonpath([dest_real, pr]) == dest_real
+            except (OSError, ValueError):
+                return False
+
+        # How many rows point at each destination path, and which paths are
+        # owned by a row that actually succeeded.
+        path_claims: Dict[str, int] = {}
+        completed_paths = set()
+        for source_path, dest_path, size, part_hash, status in rows:
+            if not dest_path or dest_path == "DUPLICATE_SKIPPED":
+                continue
+            path_claims[dest_path] = path_claims.get(dest_path, 0) + 1
+            if not (status and str(status).startswith("failed")):
+                completed_paths.add(dest_path)
+
         engine = FileEngine(dest_abs)
         purged_sources = []
+        deleted_count = 0
 
-        for source_path, dest_path, size, part_hash in rows:
-            if dest_path == "DUPLICATE_SKIPPED":
-                continue
+        try:
+            for source_path, dest_path, size, part_hash, status in rows:
+                if dest_path == "DUPLICATE_SKIPPED":
+                    continue
 
-            is_bad = False
-            if not os.path.exists(dest_path):
-                is_bad = True
-            else:
-                try:
-                    dest_size = os.path.getsize(dest_path)
-                    if dest_size != size:
+                failed_row = bool(status and str(status).startswith("failed"))
+
+                # A failed row with no recorded destination: nothing was ever
+                # written, so just drop the record.
+                if failed_row and not dest_path:
+                    purged_sources.append(source_path)
+                    continue
+
+                is_bad = failed_row
+                if not is_bad:
+                    if not os.path.exists(dest_path):
                         is_bad = True
-                    elif part_hash:
-                        dest_hash = engine._get_part_hash(dest_path, dest_size)
-                        if dest_hash and dest_hash != part_hash:
+                    else:
+                        try:
+                            dest_size = os.path.getsize(dest_path)
+                            if dest_size != size:
+                                is_bad = True
+                            elif part_hash:
+                                dest_hash = engine._get_part_hash(dest_path, dest_size)
+                                if dest_hash and dest_hash != part_hash:
+                                    is_bad = True
+                        except OSError:
                             is_bad = True
-                except OSError:
-                    is_bad = True
 
-            if is_bad:
+                if not is_bad:
+                    continue
+
                 purged_sources.append(source_path)
-                if os.path.exists(dest_path):
-                    try:
-                        os.remove(dest_path)
-                    except Exception:
-                        pass
 
-        engine.close()
+                # Only delete a file this row unambiguously owns.
+                if not os.path.exists(dest_path):
+                    continue
+                if not is_inside_dest(dest_path):
+                    continue
+                if path_claims.get(dest_path, 0) != 1:
+                    continue
+                if failed_row and dest_path in completed_paths:
+                    continue
+
+                try:
+                    os.remove(dest_path)
+                    deleted_count += 1
+                except OSError:
+                    pass
+        finally:
+            engine.close()
 
         if purged_sources:
             try:
@@ -663,7 +802,8 @@ class OrganizerAPI:
 
         return {
             "success": True,
-            "repaired_count": len(purged_sources)
+            "repaired_count": len(purged_sources),
+            "deleted_count": deleted_count
         }
 
     def auto_repair_if_needed(self, dest_abs: str):

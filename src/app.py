@@ -1,9 +1,16 @@
 import os
 import sys
+import shutil
+import secrets
 import threading
 import subprocess
 from flask import Flask, render_template, request, jsonify
 from .api_organizer import OrganizerAPI
+
+# The server binds a local port, so without this any web page or local process
+# could drive the organizer (moving/trashing files) unauthenticated. A fresh
+# token is minted per launch and handed to the UI when the page is rendered.
+API_TOKEN = secrets.token_urlsafe(32)
 
 if getattr(sys, 'frozen', False):
     template_folder = os.path.join(sys._MEIPASS, 'templates')
@@ -51,24 +58,42 @@ def progress_cb(current: int, total: int, msg: str, eta: str = ""):
     if eta:
         state.eta = eta
 
+@app.before_request
+def require_token():
+    # Only /api/ is gated. The page itself must load so it can receive the token.
+    if not request.path.startswith("/api/"):
+        return None
+    supplied = request.headers.get("X-Organizer-Token") or request.args.get("token")
+    if supplied and secrets.compare_digest(supplied, API_TOKEN):
+        return None
+    return jsonify({"success": False, "error": "Unauthorized"}), 403
+
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", api_token=API_TOKEN)
 
 @app.route("/api/select_folder", methods=["GET"])
 def select_folder():
     prompt_text = request.args.get("prompt", "Select folder")
-    script = f'''
-    try
-        tell application (path to frontmost application as text)
-            set theFolder to choose folder with prompt "{prompt_text}"
-            POSIX path of theFolder
-        end tell
-    on error number -128
-        return ""
-    end try
+    # The prompt MUST NOT be interpolated into the script source. AppleScript
+    # would evaluate any embedded `do shell script` while building the dialog's
+    # argument. Passing it through argv makes it inert data.
+    script = '''
+    on run argv
+        try
+            tell application (path to frontmost application as text)
+                set theFolder to choose folder with prompt (item 1 of argv)
+                POSIX path of theFolder
+            end tell
+        on error number -128
+            return ""
+        end try
+    end run
     '''
-    result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+    result = subprocess.run(
+        ['osascript', '-e', script, prompt_text],
+        capture_output=True, text=True
+    )
     folder = result.stdout.strip()
     return jsonify({"folder": folder})
 
@@ -187,7 +212,10 @@ def list_volumes():
                         "total": format_size(usage.total),
                         "mounted": True
                     })
-                except Exception:
+                # Deliberately narrow: a broad `except Exception` here used to
+                # swallow a NameError (shutil was never imported) so this
+                # endpoint always returned an empty list.
+                except OSError:
                     pass
     # 2. Check diskutil for unmounted disks
     unmounted = []

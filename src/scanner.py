@@ -1,5 +1,7 @@
 import os
-from typing import List, Dict, Set, Tuple
+import hashlib
+import tempfile
+from typing import List, Dict, Set, Tuple, Optional
 from .categorizer import Categorizer
 
 GARBAGE_FILES = {
@@ -17,8 +19,16 @@ SKIP_SYSTEM_DIRS = {
 }
 
 class Scanner:
-    def __init__(self, categorizer: Categorizer):
+    def __init__(self, categorizer: Categorizer, staging_root: Optional[str] = None):
         self.categorizer = categorizer
+        # Where auto-extracted archives are unpacked. Deliberately NOT the
+        # source drive: the organizer advertises a read-only source policy,
+        # and a large Takeout archive unpacked in place silently doubles its
+        # footprint on a drive that may be full or mounted read-only.
+        self.staging_root = staging_root or os.path.join(
+            tempfile.gettempdir(), "drive_organizer_staging"
+        )
+        self.staging_dirs_used: List[str] = []
         self.projects_found: List[str] = []
         self.files_to_process: List[str] = []
         self.ignored_garbage_count = 0
@@ -39,11 +49,35 @@ class Scanner:
         # Never unzip zip files that are inside a staging folder
         if ".unzipped_" in root_path:
             return False
+        if root_path and root_path.startswith(self.staging_root):
+            return False
         fn = filename.lower()
         if not fn.endswith('.zip'):
             return False
         gdrive_keywords = ["drive", "gdrive", "takeout", "cloud", "download"]
         return any(kw in fn for kw in gdrive_keywords)
+
+    def cleanup_staging(self):
+        """Removes archive staging directories created during this scan.
+
+        Called only after a successful transfer: on cancellation or failure the
+        extracted data is left in place so the next run can resume without
+        unzipping everything again.
+        """
+        import shutil as _shutil
+        removed = 0
+        for d in self.staging_dirs_used:
+            if os.path.isdir(d):
+                _shutil.rmtree(d, ignore_errors=True)
+                removed += 1
+        self.staging_dirs_used = []
+        # Drop the staging root too, once nothing is left inside it.
+        try:
+            if os.path.isdir(self.staging_root) and not os.listdir(self.staging_root):
+                os.rmdir(self.staging_root)
+        except OSError:
+            pass
+        return removed
 
     def classify_garbage(self, filename: str) -> str:
         if filename.startswith("._"):
@@ -74,10 +108,17 @@ class Scanner:
         zip_filename = os.path.basename(zip_path)
 
         try:
-            zip_dir = os.path.dirname(zip_path)
             zip_name = os.path.splitext(zip_filename)[0]
-            staging_dir = os.path.join(zip_dir, f".unzipped_{zip_name}")
+            # Unpack under the staging root rather than beside the archive, so
+            # the source drive is never written to. The directory name is
+            # keyed by the full zip path so two archives with the same name
+            # cannot collide, and so a re-run can still find (and re-use) a
+            # previous complete extraction.
+            path_key = hashlib.sha256(os.path.abspath(zip_path).encode("utf-8")).hexdigest()[:16]
+            staging_dir = os.path.join(self.staging_root, f"{zip_name}_{path_key}")
             completed_marker = os.path.join(staging_dir, ".unzip_completed")
+            if staging_dir not in self.staging_dirs_used:
+                self.staging_dirs_used.append(staging_dir)
 
             # 1. INSTANT PREVIEW MODE (Memory-Only Inspection in ~0.05s)
             if is_preview:
@@ -230,11 +271,19 @@ class Scanner:
                 if cancel_check and cancel_check():
                     return
 
+                # Several project markers are directories that get pruned just
+                # below (.git above all), so snapshot the listing first.
+                unpruned_dirs = list(dirs)
+
                 # 1. Prune skipped system / heavy build / unzipped staging directories in-place BEFORE entering them
                 dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
 
-                # 2. Check if this is a Code Project
-                items_set = set(dirs) | set(files)
+                # 2. Check if this is a Code Project.
+                # Matched against the *unpruned* listing: pruning removed .git
+                # before this test ran, so a plain Git repository (whose only
+                # marker is .git) was never detected and got shredded into
+                # loose files scattered across Code/Snippets, Documents, etc.
+                items_set = set(unpruned_dirs) | set(files)
                 if root != src and root not in excluded and self.categorizer.is_project_root(root, items_set):
                     self.projects_found.append(root)
                     dirs.clear() # Do not traverse INSIDE the project!
