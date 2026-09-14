@@ -5,18 +5,28 @@ from typing import List, Dict, Set, Tuple, Optional
 from .categorizer import Categorizer
 
 GARBAGE_FILES = {
-    ".DS_Store", ".localized", "Thumbs.db", ".Spotlight-V100", ".fseventsd"
+    ".DS_Store", ".localized", "Thumbs.db", ".Spotlight-V100", ".fseventsd",
+    # The organizer's own bookkeeping. Pointing the tool at a folder it has
+    # already organized would otherwise treat these as user data and file them
+    # under Unsorted/ -- and a stale copy of a checkpoint database is worse
+    # than useless.
+    ".organizer_checkpoint.db",
+    ".organizer_checkpoint.db-shm",
+    ".organizer_checkpoint.db-wal",
+    ".metadata_never_index",
 }
 
 GARBAGE_PREFIXES = (
     "._", "~$"
 )
 
+# Staging area for extracted archives; never user content.
+SKIP_ORGANIZER_DIRS = {".organizer_staging", ".Duplicates_Trash"}
+
 SKIP_SYSTEM_DIRS = {
     ".Trash", ".thumbnails", ".fseventsd", ".Spotlight-V100", ".Trashes",
     "node_modules", ".git", "__pycache__", ".venv", "venv", ".cache", "Caches", ".tmp",
-    ".Duplicates_Trash"
-}
+} | SKIP_ORGANIZER_DIRS
 
 class Scanner:
     def __init__(self, categorizer: Categorizer, staging_root: Optional[str] = None):

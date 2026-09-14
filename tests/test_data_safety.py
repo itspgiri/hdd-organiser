@@ -517,5 +517,132 @@ class VolumeListingTests(unittest.TestCase):
                             "/Volumes is populated but the endpoint reported nothing")
 
 
+class RerunIdempotencyTests(TempCaseMixin, unittest.TestCase):
+    """Running the same job twice (the "did I already sort this?" case) must
+    not duplicate anything. Loose files were checkpointed, but code projects
+    were not, so every re-run cloned each repo as project_1, project_2, ..."""
+
+    def _api(self):
+        return OrganizerAPI(CONFIG_PATH, lambda m: None, lambda *a, **k: None)
+
+    def _seed_source(self):
+        write_file(os.path.join(self.source, "stuff", "notes.txt"), b"some notes")
+        repo = os.path.join(self.source, "my-app")
+        write_file(os.path.join(repo, ".git", "HEAD"), b"ref: refs/heads/main")
+        write_file(os.path.join(repo, "app.py"), b"print('hi')")
+
+    def _dest_listing(self):
+        out = []
+        for root, _dirs, files in os.walk(self.dest):
+            for f in files:
+                out.append(os.path.relpath(os.path.join(root, f), self.dest))
+        return sorted(out)
+
+    def test_second_identical_run_changes_nothing(self):
+        self._seed_source()
+        api = self._api()
+
+        api.run(self.source, self.dest)
+        after_first = self._dest_listing()
+        api.run(self.source, self.dest)
+        after_second = self._dest_listing()
+
+        self.assertEqual(after_first, after_second,
+                         "re-running the same job changed the destination")
+
+    def test_project_is_not_cloned_on_rerun(self):
+        self._seed_source()
+        api = self._api()
+
+        api.run(self.source, self.dest)
+        api.run(self.source, self.dest)
+
+        code_dir = os.path.join(self.dest, "Code")
+        self.assertEqual(sorted(os.listdir(code_dir)), ["my-app"],
+                         "the code project was cloned by the second run")
+
+    def test_project_is_recognised_without_a_checkpoint(self):
+        """Covers a destination organized before project checkpoints existed:
+        the DB has no record, so recognition must fall back to content."""
+        self._seed_source()
+        api = self._api()
+        api.run(self.source, self.dest)
+
+        engine = FileEngine(self.dest)
+        with engine.lock:
+            engine.conn.execute("DELETE FROM projects")
+            engine.conn.commit()
+        engine.close()
+
+        api.run(self.source, self.dest)
+
+        code_dir = os.path.join(self.dest, "Code")
+        self.assertEqual(sorted(os.listdir(code_dir)), ["my-app"],
+                         "a project with no checkpoint record was cloned instead of recognised")
+
+    def test_genuinely_different_project_with_same_name_still_gets_a_suffix(self):
+        """Negative control: two unrelated projects sharing a name must not be
+        merged into one just because dedup got keener."""
+        api = self._api()
+        repo_a = os.path.join(self.source, "a", "my-app")
+        write_file(os.path.join(repo_a, ".git", "HEAD"), b"ref: refs/heads/main")
+        write_file(os.path.join(repo_a, "app.py"), b"print('from A')")
+
+        repo_b = os.path.join(self.source, "b", "my-app")
+        write_file(os.path.join(repo_b, ".git", "HEAD"), b"ref: refs/heads/main")
+        write_file(os.path.join(repo_b, "app.py"), b"print('a completely different program')")
+
+        api.run(self.source, self.dest)
+
+        code_dir = os.path.join(self.dest, "Code")
+        self.assertEqual(sorted(os.listdir(code_dir)), ["my-app", "my-app_1"],
+                         "two different projects sharing a name were collapsed together")
+
+
+class OrganizerHousekeepingTests(TempCaseMixin, unittest.TestCase):
+    """Feeding an already-organized folder back in as a SOURCE used to drag the
+    organizer's own checkpoint database and Spotlight marker into Unsorted/."""
+
+    def test_housekeeping_files_are_treated_as_garbage(self):
+        for name in (".organizer_checkpoint.db", ".organizer_checkpoint.db-shm",
+                     ".organizer_checkpoint.db-wal", ".metadata_never_index"):
+            write_file(os.path.join(self.source, name), b"internal bookkeeping")
+        write_file(os.path.join(self.source, "real.txt"), b"actual user data")
+
+        scanner = Scanner(Categorizer(CONFIG_PATH),
+                          staging_root=os.path.join(self.tmp, "staging"))
+        scanner.scan_directory(self.source)
+
+        queued = [os.path.basename(f) for f in scanner.files_to_process]
+        self.assertEqual(queued, ["real.txt"],
+                         f"the organizer queued its own housekeeping files: {queued}")
+
+    def test_reorganizing_an_organized_folder_adds_no_unsorted_junk(self):
+        write_file(os.path.join(self.source, "stuff", "notes.txt"), b"some notes")
+        api = OrganizerAPI(CONFIG_PATH, lambda m: None, lambda *a, **k: None)
+        api.run(self.source, self.dest)
+
+        second = os.path.join(self.tmp, "dest2")
+        api.run(self.dest, second)
+
+        unsorted = os.path.join(second, "Unsorted")
+        leftovers = os.listdir(unsorted) if os.path.isdir(unsorted) else []
+        self.assertEqual(leftovers, [],
+                         f"organizer internals were filed as user data: {leftovers}")
+
+    def test_staging_directory_is_never_rescanned(self):
+        staging = os.path.join(self.source, ".organizer_staging")
+        write_file(os.path.join(staging, "extracted", "leftover.txt"), b"staged content")
+        write_file(os.path.join(self.source, "real.txt"), b"actual user data")
+
+        scanner = Scanner(Categorizer(CONFIG_PATH),
+                          staging_root=os.path.join(self.tmp, "staging"))
+        scanner.scan_directory(self.source)
+
+        queued = [os.path.basename(f) for f in scanner.files_to_process]
+        self.assertEqual(queued, ["real.txt"],
+                         "a leftover staging area was re-ingested as user content")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,7 @@ from typing import Callable, Dict, Tuple, Set, List, Optional
 from .categorizer import Categorizer
 from .scanner import Scanner
 from .dates import DateExtractor
-from .file_ops import FileEngine, safe_copy, restore_timestamps, copy_project_intact
+from .file_ops import FileEngine, safe_copy, restore_timestamps, copy_project_intact, project_already_copied
 
 class OrganizerAPI:
     def __init__(self, config_path: str, log_cb: Callable[[str], None], progress_cb: Callable[[int, int, str], None]):
@@ -241,17 +241,40 @@ class OrganizerAPI:
                     return False
                 proj_name = os.path.basename(proj)
                 dest_proj = os.path.join(dest_abs, "Code", proj_name)
-                
-                # Collision handling for duplicate project folder names
+
+                # Projects are copied wholesale, so they need their own
+                # "already done" check. Without it, re-running the same job
+                # clones every repository again as project_1, project_2, ...
+                previous = engine.get_project_copy(proj)
+                if previous:
+                    self.progress_cb(i + 1, total_items, f"Skipped (Already copied): {proj_name}")
+                    continue
+
+                # Collision handling for duplicate project folder names.
+                # An existing folder that is already a faithful copy of this
+                # project is a re-run, not a name collision.
                 if os.path.exists(dest_proj):
+                    if project_already_copied(proj, dest_proj):
+                        engine.record_project(proj, dest_proj)
+                        self.progress_cb(i + 1, total_items, f"Skipped (Already copied): {proj_name}")
+                        continue
                     c = 1
                     while os.path.exists(os.path.join(dest_abs, "Code", f"{proj_name}_{c}")):
+                        candidate = os.path.join(dest_abs, "Code", f"{proj_name}_{c}")
+                        if project_already_copied(proj, candidate):
+                            break
                         c += 1
                     dest_proj = os.path.join(dest_abs, "Code", f"{proj_name}_{c}")
+                    if project_already_copied(proj, dest_proj):
+                        engine.record_project(proj, dest_proj)
+                        self.progress_cb(i + 1, total_items, f"Skipped (Already copied): {proj_name}")
+                        continue
 
                 self.progress_cb(i + 1, total_items, f"Copying project: {os.path.basename(dest_proj)}")
                 ok, proj_err = copy_project_intact(proj, dest_proj)
-                if not ok:
+                if ok:
+                    engine.record_project(proj, dest_proj)
+                else:
                     self.log_cb(f"Warning: Issue copying code project {proj_name}: {proj_err}")
 
 
@@ -406,8 +429,18 @@ class OrganizerAPI:
             except Exception:
                 pass
 
+            # Play the chime on a daemon thread so the child gets reaped.
+            # A bare Popen here left an unreaped afplay process behind after
+            # every completed transfer.
+            def _chime():
+                try:
+                    subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"],
+                                   timeout=30)
+                except Exception:
+                    pass
+
             try:
-                subprocess.Popen(["afplay", "/System/Library/Sounds/Glass.aiff"])
+                threading.Thread(target=_chime, daemon=True).start()
             except Exception:
                 pass
             return True

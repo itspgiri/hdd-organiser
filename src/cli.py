@@ -9,7 +9,7 @@ from .utils import print_header, print_success, print_error, print_info, print_w
 from .categorizer import Categorizer
 from .scanner import Scanner
 from .dates import DateExtractor
-from .file_ops import FileEngine, safe_copy, copy_project_intact
+from .file_ops import FileEngine, safe_copy, copy_project_intact, project_already_copied
 from .api_organizer import OrganizerAPI
 
 def run_cli():
@@ -155,13 +155,35 @@ def run_cli():
             for proj in scanner.projects_found:
                 proj_name = os.path.basename(proj)
                 dest_proj = os.path.join(dest_abs, "Code", proj_name)
+
+                # Projects are copied wholesale, so they need their own
+                # "already done" check, or a re-run clones each repository
+                # again as project_1, project_2, ...
+                if engine.get_project_copy(proj):
+                    progress.advance(proj_task)
+                    continue
+
                 if os.path.exists(dest_proj):
+                    if project_already_copied(proj, dest_proj):
+                        engine.record_project(proj, dest_proj)
+                        progress.advance(proj_task)
+                        continue
                     c = 1
                     while os.path.exists(os.path.join(dest_abs, "Code", f"{proj_name}_{c}")):
+                        candidate = os.path.join(dest_abs, "Code", f"{proj_name}_{c}")
+                        if project_already_copied(proj, candidate):
+                            break
                         c += 1
                     dest_proj = os.path.join(dest_abs, "Code", f"{proj_name}_{c}")
+                    if project_already_copied(proj, dest_proj):
+                        engine.record_project(proj, dest_proj)
+                        progress.advance(proj_task)
+                        continue
+
                 ok, proj_err = copy_project_intact(proj, dest_proj)
-                if not ok:
+                if ok:
+                    engine.record_project(proj, dest_proj)
+                else:
                     print_warning(f"Issue copying code project {proj_name}: {proj_err}")
 
 

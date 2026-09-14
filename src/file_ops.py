@@ -112,6 +112,37 @@ def copy_project_intact(source_dir: str, dest_dir: str) -> Tuple[bool, str]:
             return False, str(err)
 
 
+def project_already_copied(source_dir: str, dest_dir: str) -> bool:
+    """True if dest_dir already looks like a faithful copy of source_dir.
+
+    Used as a fallback when the checkpoint database has no record of the
+    project (it was deleted, or the destination was organized by an older
+    version). Without this, re-running the same job clones every repository
+    again as project_1, project_2, ...
+
+    Compares the relative path set and file sizes rather than every byte:
+    a repository can be gigabytes, and this runs before any copying.
+    """
+    if not os.path.isdir(dest_dir):
+        return False
+
+    ignored = set(PROJECT_IGNORE_PATTERNS)
+    for root, dirs, files in os.walk(source_dir):
+        dirs[:] = [d for d in dirs if d not in ignored]
+        for name in files:
+            if name in ignored:
+                continue
+            src_file = os.path.join(root, name)
+            rel = os.path.relpath(src_file, source_dir)
+            dst_file = os.path.join(dest_dir, rel)
+            try:
+                if os.path.getsize(src_file) != os.path.getsize(dst_file):
+                    return False
+            except OSError:
+                return False
+    return True
+
+
 class FileEngine:
     def __init__(self, dest_root: str):
         self.dest_root = dest_root
@@ -153,6 +184,18 @@ class FileEngine:
                 self.conn.execute("ALTER TABLE copies ADD COLUMN part_hash TEXT")
             
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_size_hash ON copies(size, part_hash)")
+
+            # Code projects are copied wholesale rather than file-by-file, so
+            # they need their own checkpoint. Kept out of `copies` because
+            # verify_transfer size-checks every row there, and a directory row
+            # would always look like a mismatch.
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS projects (
+                    source_path TEXT PRIMARY KEY,
+                    dest_path TEXT,
+                    status TEXT
+                )
+            ''')
             self.conn.commit()
 
     def ensure_dir(self, dir_path: str):
@@ -196,6 +239,26 @@ class FileEngine:
             cursor = self.conn.execute('SELECT status FROM copies WHERE source_path = ?', (source_path,))
             row = cursor.fetchone()
             return row is not None and row[0] == 'completed'
+
+    def get_project_copy(self, source_path: str) -> Optional[str]:
+        """Destination of a previously copied project, or None."""
+        with self.lock:
+            cursor = self.conn.execute(
+                'SELECT dest_path, status FROM projects WHERE source_path = ?', (source_path,)
+            )
+            row = cursor.fetchone()
+        if row and row[1] == 'completed' and row[0] and os.path.isdir(row[0]):
+            return row[0]
+        return None
+
+    def record_project(self, source_path: str, dest_path: str, status: str = "completed"):
+        """Checkpoint a copied code project so a re-run does not clone it again."""
+        with self.lock:
+            self.conn.execute('''
+                INSERT OR REPLACE INTO projects (source_path, dest_path, status)
+                VALUES (?, ?, ?)
+            ''', (source_path, dest_path, status))
+            self.conn.commit()
 
     def record_copy(self, source_path: str, dest_path: str, size: int, mtime: float, part_hash: str = "", status: str = "completed"):
         """Atomic write to checkpoint DB with size, status, and hash indexing."""
