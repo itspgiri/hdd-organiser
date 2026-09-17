@@ -156,7 +156,7 @@ class DeduplicationTests(TempCaseMixin, unittest.TestCase):
             size = os.path.getsize(original)
             engine.record_copy("/src/original/clip.mov", original, size, 0.0,
                                engine._get_part_hash(original, size))
-            is_dup, _ = engine.is_content_duplicate(candidate, os.path.getsize(candidate))
+            is_dup, _, _twin = engine.is_content_duplicate(candidate, os.path.getsize(candidate))
         finally:
             engine.close()
 
@@ -173,7 +173,7 @@ class DeduplicationTests(TempCaseMixin, unittest.TestCase):
             size = os.path.getsize(original)
             engine.record_copy("/src/original/same.mov", original, size, 0.0,
                                engine._get_part_hash(original, size))
-            is_dup, _ = engine.is_content_duplicate(candidate, os.path.getsize(candidate))
+            is_dup, _, _twin = engine.is_content_duplicate(candidate, os.path.getsize(candidate))
         finally:
             engine.close()
 
@@ -189,7 +189,7 @@ class DeduplicationTests(TempCaseMixin, unittest.TestCase):
         try:
             engine.record_copy("/src/gone.mov", ghost, len(payload), 0.0,
                                engine._get_part_hash(candidate, len(payload)))
-            is_dup, _ = engine.is_content_duplicate(candidate, len(payload))
+            is_dup, _, _twin = engine.is_content_duplicate(candidate, len(payload))
         finally:
             engine.close()
 
@@ -209,15 +209,22 @@ class DeduplicationTests(TempCaseMixin, unittest.TestCase):
         def worker(name, path):
             barrier.wait()
             target = os.path.join(self.dest, "Media", "photo.jpg")
-            final, part_hash = engine.resolve_destination(target, "photo.jpg",
-                                                          os.path.getsize(path), path)
-            results[name] = final
-            if final:
-                engine.copy_file(path, final)
-                engine.record_copy(path, final, os.path.getsize(path), 0.0, part_hash)
-                engine.release_reservation(final)
-            else:
-                engine.record_copy(path, "DUPLICATE_SKIPPED", os.path.getsize(path), 0.0, part_hash)
+            final = None
+            try:
+                final, part_hash, _twin = engine.resolve_destination(
+                    target, "photo.jpg", os.path.getsize(path), path)
+                results[name] = final
+                if final:
+                    engine.copy_file(path, final)
+                    engine.record_copy(path, final, os.path.getsize(path), 0.0, part_hash)
+                else:
+                    engine.record_copy(path, "DUPLICATE_SKIPPED", os.path.getsize(path), 0.0, part_hash)
+            finally:
+                # Mirrors the production finally-block. Without it, a worker
+                # that dies holding a reservation makes the other thread wait
+                # out the full 300s deadline in resolve_destination.
+                if final:
+                    engine.release_reservation(final)
 
         threads = [threading.Thread(target=worker, args=("a", a)),
                    threading.Thread(target=worker, args=("b", b))]

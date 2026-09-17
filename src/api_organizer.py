@@ -10,7 +10,57 @@ from typing import Callable, Dict, Tuple, Set, List, Optional
 from .categorizer import Categorizer
 from .scanner import Scanner
 from .dates import DateExtractor
-from .file_ops import FileEngine, safe_copy, restore_timestamps, copy_project_intact, project_already_copied
+from .file_ops import (
+    FileEngine, safe_copy, restore_timestamps, copy_project_intact,
+    project_already_copied, files_are_identical,
+)
+
+# Video containers Apple pairs with a still to make a Live Photo.
+LIVE_PHOTO_VIDEO_EXTS = ("mov", "mp4")
+
+
+def compute_relative_destination(categorizer, dates, file_path: str,
+                                 live_photo_dates: Optional[Dict[Tuple[str, str], Tuple[str, str]]] = None) -> str:
+    """Works out a file's path relative to the destination root.
+
+    Shared by the GUI (OrganizerAPI.run) and the CLI so the two cannot drift
+    apart -- they previously carried two hand-maintained copies of this logic.
+    """
+    filename = os.path.basename(file_path)
+    category = categorizer.get_file_category(filename)
+
+    if category != "Media":
+        return os.path.join(category, filename)
+
+    live_photo_dates = live_photo_dates or {}
+    name_only = filename.rsplit('.', 1)[0]
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ""
+    lookup_key = (os.path.dirname(file_path), name_only)
+
+    year = month = None
+
+    # Live Photo pairing, consulted BEFORE extract_date rather than after.
+    #
+    # The old guard was `if not (year and month): <consult pairing table>`,
+    # but extract_date essentially always succeeds because it falls back to
+    # filesystem mtime. So the table was never read, and a Live Photo whose
+    # .mov had a reset mtime was filed years away from its own .heic.
+    # The still's capture date is the authoritative one for the pair.
+    if ext in LIVE_PHOTO_VIDEO_EXTS and lookup_key in live_photo_dates:
+        year, month = live_photo_dates[lookup_key]
+
+    if not (year and month):
+        year, month = dates.extract_date(file_path)
+
+    if categorizer.is_screenshot(filename):
+        if year and month:
+            return os.path.join("Media", "Screenshots", year, month, filename)
+        return os.path.join("Media", "Screenshots", "Unsorted", filename)
+
+    if year and month:
+        return os.path.join("Media", year, month, filename)
+    return os.path.join("Unsorted", filename)
+
 
 class OrganizerAPI:
     def __init__(self, config_path: str, log_cb: Callable[[str], None], progress_cb: Callable[[int, int, str], None]):
@@ -95,13 +145,19 @@ class OrganizerAPI:
 
         
         total_bytes = 0
+        unmeasured_files = 0
         category_counts: Dict[str, int] = {}
         category_samples: Dict[str, List[str]] = {}
         for fp in scanner.files_to_process:
             try:
                 total_bytes += os.path.getsize(fp)
             except OSError:
-                pass
+                # In preview mode archives are not actually extracted, so their
+                # members are *virtual* staging paths that do not exist on disk
+                # yet. These used to silently contribute 0 bytes, which then fed
+                # the free-space pre-flight check below and could wave through a
+                # transfer that cannot fit.
+                unmeasured_files += 1
             cat = categorizer.get_file_category(os.path.basename(fp))
             category_counts[cat] = category_counts.get(cat, 0) + 1
             if cat not in category_samples:
@@ -109,12 +165,46 @@ class OrganizerAPI:
             if len(category_samples[cat]) < 25:
                 category_samples[cat].append(fp)
 
+        estimated_archive_bytes = 0
+        if unmeasured_files and is_preview:
+            # Read the uncompressed sizes straight out of the zip directories.
+            # Cheap: the central directory is metadata, not file content.
+            import zipfile
+            for zip_path in scanner.processed_zips:
+                try:
+                    with zipfile.ZipFile(zip_path, 'r') as zf:
+                        estimated_archive_bytes += sum(
+                            m.file_size for m in zf.infolist() if not m.is_dir()
+                        )
+                except Exception:
+                    try:
+                        # Fall back to the compressed size as a lower bound.
+                        estimated_archive_bytes += os.path.getsize(zip_path)
+                    except OSError:
+                        pass
+            total_bytes += estimated_archive_bytes
+
         from .utils import format_size
         size_str = format_size(total_bytes)
         self.log_cb(f"Found {len(scanner.files_to_process)} files ({size_str}) to organize.")
+        if estimated_archive_bytes:
+            self.log_cb(
+                f"  (includes ~{format_size(estimated_archive_bytes)} estimated from "
+                f"{len(scanner.processed_zips)} archive(s) that will be unzipped)"
+            )
         self.log_cb(f"Found {len(scanner.projects_found)} intact code projects.")
         if scanner.ignored_garbage_count > 0:
             self.log_cb(f"Safely ignored {scanner.ignored_garbage_count} system/garbage files.")
+        if scanner.skipped_dir_breakdown:
+            detail = ", ".join(
+                f"{name} x{count}"
+                for name, count in sorted(scanner.skipped_dir_breakdown.items(),
+                                          key=lambda kv: -kv[1])
+            )
+            self.log_cb(
+                f"⏭️  Skipped {sum(scanner.skipped_dir_breakdown.values())} build/cache "
+                f"folder(s), which will NOT be copied: {detail}"
+            )
 
         free_space_str = "Unknown"
         free_bytes = None
@@ -129,13 +219,28 @@ class OrganizerAPI:
         # Hard block: refuse a fresh run that cannot possibly fit.
         # On a resume the destination may already hold most of the data, so warn only.
         if free_bytes is not None and total_bytes > free_bytes and not is_preview:
+            # Check if all sources and destination are on the same volume (for APFS zero-copy)
+            same_volume = False
+            try:
+                dest_dev = os.stat(dest_parent).st_dev
+                sources = [src for src in OrganizerAPI._split_sources(source_abs) if os.path.exists(src)]
+                if sources:
+                    same_volume = all(os.stat(src).st_dev == dest_dev for src in sources)
+            except OSError:
+                pass
+
             is_resume = os.path.exists(os.path.join(dest_abs, ".organizer_checkpoint.db"))
             msg = (
                 f"Not enough free space on destination: need {size_str}, "
                 f"only {free_space_str} available."
             )
+            
+            from .file_ops import _HAS_NATIVE_COPYFILE
+            
             if is_resume:
                 self.log_cb(f"⚠️  {msg} Continuing because this looks like a resumed transfer.")
+            elif same_volume and _HAS_NATIVE_COPYFILE:
+                self.log_cb(f"⚠️  {msg} Continuing because source and destination are on the same Mac drive (APFS cloning will use ~0 extra bytes).")
             else:
                 self.log_cb(f"❌ Error: {msg}")
                 return False
@@ -150,6 +255,8 @@ class OrganizerAPI:
             "ignored_garbage": scanner.ignored_garbage_count,
             "garbage_breakdown": scanner.garbage_breakdown,
             "garbage_samples": scanner.garbage_samples,
+            "skipped_dirs": scanner.skipped_dirs,
+            "skipped_dir_breakdown": scanner.skipped_dir_breakdown,
             "gdrive_zips_extracted": scanner.gdrive_zips_extracted,
             "gdrive_zip_names": scanner.gdrive_zip_names,
             "free_space": free_space_str,
@@ -299,30 +406,9 @@ class OrganizerAPI:
                             self.progress_cb(idx, total_items, f"Skipped (Already copied): {filename}")
                     return
 
-                category = categorizer.get_file_category(filename)
-                
-                if category == "Media":
-                    is_ss = categorizer.is_screenshot(filename)
-                    year, month = dates.extract_date(file_path)
-                    
-                    if not (year and month):
-                        dir_name = os.path.dirname(file_path)
-                        name_only = filename.rsplit('.', 1)[0]
-                        lookup_key = (dir_name, name_only)
-                        if lookup_key in live_photo_dates:
-                            year, month = live_photo_dates[lookup_key]
-                            
-                    if is_ss:
-                        if year and month:
-                            rel_dest = os.path.join("Media", "Screenshots", year, month, filename)
-                        else:
-                            rel_dest = os.path.join("Media", "Screenshots", "Unsorted", filename)
-                    elif year and month:
-                        rel_dest = os.path.join("Media", year, month, filename)
-                    else:
-                        rel_dest = os.path.join("Unsorted", filename)
-                else:
-                    rel_dest = os.path.join(category, filename)
+                rel_dest = compute_relative_destination(
+                    categorizer, dates, file_path, live_photo_dates
+                )
                     
                 target_base = os.path.join(dest_abs, rel_dest)
                 
@@ -334,9 +420,10 @@ class OrganizerAPI:
                     
                 final_dest = None
                 try:
-                    final_dest, part_hash = engine.resolve_destination(target_base, filename, size, file_path)
+                    final_dest, part_hash, twin = engine.resolve_destination(target_base, filename, size, file_path)
                     if final_dest is None:
-                        engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime, part_hash)
+                        engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime, part_hash,
+                                           duplicate_of=twin)
                     else:
                         engine.copy_file(file_path, final_dest)
                         # Component test, not substring: a file literally named
@@ -493,22 +580,7 @@ class OrganizerAPI:
 
             for file_path in files_to_move:
                 filename = os.path.basename(file_path)
-                category = categorizer.get_file_category(filename)
-                
-                if category == "Media":
-                    is_ss = categorizer.is_screenshot(filename)
-                    year, month = dates.extract_date(file_path)
-                    if is_ss:
-                        if year and month:
-                            rel_dest = os.path.join("Media", "Screenshots", year, month, filename)
-                        else:
-                            rel_dest = os.path.join("Media", "Screenshots", "Unsorted", filename)
-                    elif year and month:
-                        rel_dest = os.path.join("Media", year, month, filename)
-                    else:
-                        rel_dest = os.path.join("Unsorted", filename)
-                else:
-                    rel_dest = os.path.join(category, filename)
+                rel_dest = compute_relative_destination(categorizer, dates, file_path)
                     
                 target_base = os.path.join(dest_abs, rel_dest)
                 size = os.path.getsize(file_path)
@@ -516,7 +588,7 @@ class OrganizerAPI:
 
                 final_dest = None
                 try:
-                    final_dest, part_hash = engine.resolve_destination(target_base, filename, size, file_path)
+                    final_dest, part_hash, _twin = engine.resolve_destination(target_base, filename, size, file_path)
                     if final_dest:
                         try:
                             shutil.move(file_path, final_dest)
@@ -559,30 +631,80 @@ class OrganizerAPI:
             return []
         import sqlite3
         conn = sqlite3.connect(db_path)
-        cursor = conn.execute("SELECT source_path, size FROM copies WHERE status = 'completed' AND dest_path = 'DUPLICATE_SKIPPED'")
-        rows = cursor.fetchall()
-        conn.close()
-        return [{"source_path": r[0], "size": r[1]} for r in rows]
+        try:
+            cursor = conn.execute(
+                "SELECT source_path, size, COALESCE(duplicate_of, '') FROM copies "
+                "WHERE status = 'completed' AND dest_path = 'DUPLICATE_SKIPPED'"
+            )
+            rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+            # Database written before duplicate_of existed.
+            cursor = conn.execute(
+                "SELECT source_path, size FROM copies "
+                "WHERE status = 'completed' AND dest_path = 'DUPLICATE_SKIPPED'"
+            )
+            rows = [(r[0], r[1], "") for r in cursor.fetchall()]
+        finally:
+            conn.close()
+        return [{"source_path": r[0], "size": r[1], "duplicate_of": r[2]} for r in rows]
 
-    def trash_duplicates(self, source_paths: list):
+    def trash_duplicates(self, source_paths: list, dest_abs: str = ""):
         """
         Safely moves duplicate source files to a '.Duplicates_Trash' folder on the source drive.
         Bypasses Finder AppleScript popups and Touch ID prompts completely (100% automated & zero-prompt).
+
+        Every file is re-verified against its surviving twin immediately before
+        being moved. This is the last point at which the user's only remaining
+        original can be taken away, and the duplicate record may be arbitrarily
+        old: the destination copy could have been deleted, moved, or removed by
+        a repair pass since it was written. Anything that cannot be proven safe
+        is left exactly where it is and reported back.
+
+        Returns (trashed_count, refused_list).
         """
         valid_paths = [p for p in source_paths if os.path.exists(p)]
         if not valid_paths:
-            return 0
+            return 0, []
+
+        # Look up the surviving twin recorded for each duplicate.
+        twins: Dict[str, str] = {}
+        if dest_abs:
+            for rec in self.get_duplicate_records(dest_abs):
+                twins[rec["source_path"]] = rec.get("duplicate_of") or ""
 
         trashed_count = 0
+        refused = []
         for file_path in valid_paths:
+            twin = twins.get(file_path, "")
+
+            if dest_abs:
+                if not twin:
+                    refused.append(
+                        f"{os.path.basename(file_path)}: no record of which destination "
+                        f"copy this matched (organized by an older version) - left in place."
+                    )
+                    continue
+                if not os.path.exists(twin):
+                    refused.append(
+                        f"{os.path.basename(file_path)}: its copy at the destination is "
+                        f"missing - left in place so you still have the original."
+                    )
+                    continue
+                if not files_are_identical(file_path, twin):
+                    refused.append(
+                        f"{os.path.basename(file_path)}: no longer byte-identical to the "
+                        f"destination copy - left in place."
+                    )
+                    continue
+
             try:
                 parent_dir = os.path.dirname(file_path)
                 trash_dir = os.path.join(parent_dir, ".Duplicates_Trash")
                 os.makedirs(trash_dir, exist_ok=True)
-                
+
                 filename = os.path.basename(file_path)
                 target_path = os.path.join(trash_dir, filename)
-                
+
                 # Handle filename collisions in trash folder
                 counter = 1
                 name, ext = os.path.splitext(filename)
@@ -600,10 +722,12 @@ class OrganizerAPI:
                     res = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
                     if res.returncode == 0:
                         trashed_count += 1
+                    else:
+                        refused.append(f"{os.path.basename(file_path)}: could not be moved.")
                 except Exception:
-                    pass
+                    refused.append(f"{os.path.basename(file_path)}: could not be moved.")
 
-        return trashed_count
+        return trashed_count, refused
 
 
 
@@ -721,7 +845,7 @@ class OrganizerAPI:
             "is_perfect": is_perfect
         }
 
-    def repair_transfer(self, dest_abs: str) -> dict:
+    def repair_transfer(self, dest_abs: str, deep: bool = True) -> dict:
         """
         Clears invalid/missing/mismatched entries from the checkpoint DB so a
         later run re-copies them.
@@ -732,6 +856,14 @@ class OrganizerAPI:
           1. exactly one DB row claims that path,
           2. no successfully-completed row claims that path,
           3. the path really lives inside dest_abs.
+
+        `deep` controls content verification. When True every healthy row is
+        re-hashed, which reads 1MB from the head and 1MB from the tail of every
+        file already at the destination. That is the right behaviour for the
+        explicit "Verify & Repair" button, but it is far too expensive to do
+        automatically before every transfer: measured at roughly 2.2 hours on
+        an external HDD holding 400,000 files. The automatic pre-flight pass
+        therefore runs with deep=False, checking only existence and size.
         """
         db_path = os.path.join(dest_abs, ".organizer_checkpoint.db")
         if not os.path.exists(db_path):
@@ -793,7 +925,7 @@ class OrganizerAPI:
                             dest_size = os.path.getsize(dest_path)
                             if dest_size != size:
                                 is_bad = True
-                            elif part_hash:
+                            elif deep and part_hash:
                                 dest_hash = engine._get_part_hash(dest_path, dest_size)
                                 if dest_hash and dest_hash != part_hash:
                                     is_bad = True
@@ -843,12 +975,19 @@ class OrganizerAPI:
         """
         Automatically inspects destination checkpoint database before transfer start,
         purging any corrupted or missing file records from past interrupted runs.
+
+        Deliberately shallow (deep=False): this runs before every merge/resume,
+        and content-hashing the entire destination first made the app look
+        frozen for hours on a large external drive. Existence and size catch
+        the interrupted-copy case this is here for; byte-level verification is
+        available on demand via the Verify & Repair button.
         """
         db_path = os.path.join(dest_abs, ".organizer_checkpoint.db")
         if not os.path.exists(db_path):
             return
 
-        res = self.repair_transfer(dest_abs)
+        self.log_cb("🔎 Checking destination for records left by a previous interrupted run...")
+        res = self.repair_transfer(dest_abs, deep=False)
         if res.get("success") and res.get("repaired_count", 0) > 0:
             count = res["repaired_count"]
             self.log_cb(f"🧹 [Auto-Repair] Detected {count} missing/corrupted file record(s) from a previous interrupted run. Automatically cleared bad records so they will be re-transferred cleanly.")

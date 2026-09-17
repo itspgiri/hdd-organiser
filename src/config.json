@@ -1,8 +1,8 @@
 {
   "categories": {
-    "Media/Photos": [".jpg", ".jpeg", ".png", ".heic", ".webp"],
-    "Media/RAW": [".cr2", ".nef", ".arw", ".dng"],
-    "Media/Videos": [".mp4", ".mov", ".avi", ".mkv"],
+    "Media/Photos": [".jpg", ".jpeg", ".png", ".heic", ".heif", ".avif", ".webp", ".gif", ".bmp", ".tif", ".tiff"],
+    "Media/RAW": [".cr2", ".cr3", ".nef", ".arw", ".dng", ".orf", ".raf", ".rw2"],
+    "Media/Videos": [".mp4", ".mov", ".avi", ".mkv", ".m4v", ".3gp", ".webm", ".mpg", ".mpeg", ".wmv"],
     "Documents/PDF": [".pdf"],
     "Documents/Word": [".doc", ".docx", ".pages"],
     "Documents/Spreadsheets": [".xls", ".xlsx", ".csv", ".numbers"],

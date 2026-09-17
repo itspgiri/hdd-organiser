@@ -10,7 +10,7 @@ from .categorizer import Categorizer
 from .scanner import Scanner
 from .dates import DateExtractor
 from .file_ops import FileEngine, safe_copy, copy_project_intact, project_already_copied
-from .api_organizer import OrganizerAPI
+from .api_organizer import OrganizerAPI, compute_relative_destination
 
 def run_cli():
     print_header("Drive Organizer 🚀")
@@ -200,31 +200,9 @@ def run_cli():
                     continue
                 
                 filename = os.path.basename(file_path)
-                category = categorizer.get_file_category(filename)
-                
-                # Determine relative destination
-                if category == "Media":
-                    is_ss = categorizer.is_screenshot(filename)
-                    year, month = dates.extract_date(file_path)
-                    
-                    if not (year and month):
-                        dir_name = os.path.dirname(file_path)
-                        name_only = filename.rsplit('.', 1)[0]
-                        lookup_key = (dir_name, name_only)
-                        if lookup_key in live_photo_dates:
-                            year, month = live_photo_dates[lookup_key]
-                            
-                    if is_ss:
-                        if year and month:
-                            rel_dest = os.path.join("Media", "Screenshots", year, month, filename)
-                        else:
-                            rel_dest = os.path.join("Media", "Screenshots", "Unsorted", filename)
-                    elif year and month:
-                        rel_dest = os.path.join("Media", year, month, filename)
-                    else:
-                        rel_dest = os.path.join("Unsorted", filename)
-                else:
-                    rel_dest = os.path.join(category, filename)
+                rel_dest = compute_relative_destination(
+                    categorizer, dates, file_path, live_photo_dates
+                )
                     
                 target_base = os.path.join(dest_abs, rel_dest)
                 
@@ -236,9 +214,10 @@ def run_cli():
 
                 final_dest = None
                 try:
-                    final_dest, part_hash = engine.resolve_destination(target_base, filename, size, file_path)
+                    final_dest, part_hash, twin = engine.resolve_destination(target_base, filename, size, file_path)
                     if final_dest is None:
-                        engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime, part_hash)
+                        engine.record_copy(file_path, "DUPLICATE_SKIPPED", size, mtime, part_hash,
+                                           duplicate_of=twin)
                     else:
                         engine.copy_file(file_path, final_dest)
                         # Component test, not substring, so a file named

@@ -99,7 +99,10 @@ def select_folder():
 
 @app.route("/api/start", methods=["POST"])
 def start():
-    if state.status == "running":
+    # "cancelling" counts as busy: the worker thread is still copying and still
+    # holds the checkpoint database. Allowing a start here spawned a second
+    # organizer against the same DB.
+    if state.status in ("running", "cancelling"):
         return jsonify({"success": False, "error": "Already running"})
 
     data = request.json
@@ -186,12 +189,15 @@ def get_duplicates():
 def trash_duplicates():
     data = request.json
     source_paths = data.get("source_paths", [])
+    # dest is required for the safety re-check: it locates the checkpoint DB
+    # that records which destination file each duplicate matched.
+    dest = data.get("dest", "")
     if not source_paths:
-        return jsonify({"success": False, "count": 0})
+        return jsonify({"success": False, "count": 0, "refused": []})
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
-    count = api.trash_duplicates(source_paths)
-    return jsonify({"success": True, "count": count})
+    count, refused = api.trash_duplicates(source_paths, dest_abs=dest)
+    return jsonify({"success": True, "count": count, "refused": refused})
 
 @app.route("/api/list_volumes", methods=["GET"])
 def list_volumes():
@@ -334,9 +340,21 @@ def cancel_operation():
     global active_api_instance
     if active_api_instance:
         active_api_instance.cancel()
-    state.status = "error"
-    state.message = "Operation cancelled by user. Progress saved."
-    log_cb("⛔ Operation cancelled by user.")
+    # Deliberately NOT a terminal state.
+    #
+    # This used to set status="error" synchronously while the worker thread was
+    # still mid-copy. The next poll saw a terminal status and re-enabled Start,
+    # and /api/start only refuses when status == "running" -- so a second click
+    # spawned a second organizer thread against the same checkpoint database
+    # and overwrote active_api_instance, after which the first thread could no
+    # longer be cancelled at all.
+    #
+    # The worker thread in run_organizer() now owns the transition to a
+    # terminal state; this only requests the stop.
+    if state.status == "running":
+        state.status = "cancelling"
+    state.message = "Cancelling... finishing the file currently in flight."
+    log_cb("⛔ Cancellation requested. Finishing the current file, then stopping.")
     return jsonify({"success": True})
 
 def run_organizer(source, dest, is_preview=False, dest_mode="new", excluded_projects=None):
@@ -351,12 +369,18 @@ def run_organizer(source, dest, is_preview=False, dest_mode="new", excluded_proj
         if success:
             state.status = "complete"
         else:
-            state.status = "error" if not api.cancelled else "cancelled"
+            state.status = "cancelled" if api.cancelled else "error"
     except Exception as e:
         state.status = "error"
         state.message = str(e)
         log_cb(f"❌ Error: {str(e)}")
     finally:
+        # This thread is the sole owner of the terminal transition (/api/cancel
+        # only sets the interim "cancelling"). If anything above failed to land
+        # on a terminal status, force one -- otherwise the UI polls forever and
+        # Start stays disabled with no way back.
+        if state.status not in ("complete", "error", "cancelled"):
+            state.status = "cancelled" if api.cancelled else "error"
         active_api_instance = None
 
 

@@ -61,34 +61,90 @@ class DateExtractor:
         # 6. Fallback
         return None, None
 
-    EXIF_EXTENSIONS = {".jpg", ".jpeg", ".tif", ".tiff", ".cr2", ".nef", ".arw", ".dng"}
+    # exifread 3.5.1 supports TIFF, JPEG, PNG, WebP and HEIC/AVIF (see
+    # exifread/core/find_exif.py, which dispatches on the ftypheic/ftypavif/
+    # ftypmif1 magic). HEIC in particular was missing here, so every iPhone
+    # photo skipped EXIF entirely and fell through to filesystem mtime --
+    # filing shots under the year the file was last moved, not the year it
+    # was taken.
+    EXIF_EXTENSIONS = {
+        ".jpg", ".jpeg", ".tif", ".tiff", ".cr2", ".nef", ".arw", ".dng",
+        ".heic", ".heif", ".png", ".webp", ".avif",
+    }
     VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".3gp"}
 
+    # QuickTime/MP4 epoch is 1904-01-01; Unix is 1970-01-01.
+    _QT_EPOCH_OFFSET = 2082844800
+
+    def _decode_mvhd(self, buf: bytes) -> Optional[str]:
+        """Pulls the creation time out of every mvhd atom found in buf."""
+        import struct
+        start = 0
+        while True:
+            idx = buf.find(b'mvhd', start)
+            if idx == -1:
+                return None
+            start = idx + 4
+            # Layout after the 'mvhd' fourcc: version(1) flags(3) then
+            # creation_time, which is 4 bytes for version 0 and 8 for version 1.
+            if idx + 8 > len(buf):
+                continue
+            version = buf[idx + 4]
+            if version == 1:
+                if idx + 16 > len(buf):
+                    continue
+                creation_time = struct.unpack(">Q", buf[idx + 8: idx + 16])[0]
+            else:
+                if idx + 12 > len(buf):
+                    continue
+                creation_time = struct.unpack(">I", buf[idx + 8: idx + 12])[0]
+
+            if creation_time <= self._QT_EPOCH_OFFSET:
+                continue
+            unix_time = creation_time - self._QT_EPOCH_OFFSET
+            try:
+                dt = datetime.datetime.fromtimestamp(unix_time, tz=datetime.timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                continue
+            if 1980 <= dt.year <= 2100:
+                return f"{dt.year}:{dt.month:02d}:01 00:00:00"
+        return None
+
     def _get_video_date(self, filepath: str) -> Optional[str]:
-        """Lightweight QuickTime / MP4 creation date extraction from binary atom header."""
+        """Lightweight QuickTime / MP4 creation date extraction from binary atom header.
+
+        Reads the head *and* the tail of the file. Only the first 64KB used to
+        be scanned, but `moov` (which contains `mvhd`) is written at the end of
+        any file not saved with faststart -- which is most cameras, most
+        screen recorders and most exports. Those videos silently fell through
+        to filesystem mtime.
+        """
         ext = "." + filepath.rsplit('.', 1)[-1].lower() if '.' in filepath else ""
         if ext not in self.VIDEO_EXTENSIONS:
             return None
+        window = 131072  # 128KB
         try:
             with open(filepath, 'rb') as f:
-                header = f.read(65536)
-                mvhd_idx = header.find(b'mvhd')
-                if mvhd_idx != -1 and mvhd_idx + 16 <= len(header):
-                    import struct
-                    creation_bytes = header[mvhd_idx + 8 : mvhd_idx + 12]
-                    creation_time = struct.unpack(">I", creation_bytes)[0]
-                    if creation_time > 2082844800:
-                        unix_time = creation_time - 2082844800
-                        dt = datetime.datetime.fromtimestamp(unix_time, tz=datetime.timezone.utc)
-                        if 1980 <= dt.year <= 2100:
-                            return f"{dt.year}:{dt.month:02d}:01 00:00:00"
+                head = f.read(window)
+                found = self._decode_mvhd(head)
+                if found:
+                    return found
+
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                if size > window:
+                    # Overlap by 4 bytes so an atom straddling the boundary is
+                    # not split in half.
+                    f.seek(max(0, size - window - 4), os.SEEK_SET)
+                    return self._decode_mvhd(f.read())
         except Exception:
             pass
         return None
 
-    EXIF_EXTENSIONS = {".jpg", ".jpeg", ".tif", ".tiff", ".cr2", ".nef", ".arw", ".dng"}
-    VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".3gp"}
-    PDF_DATE_REGEX = re.compile(r'D:(20\d{6})')
+    # NOTE: EXIF_EXTENSIONS / VIDEO_EXTENSIONS used to be declared a second
+    # time right here, silently shadowing the definitions above. Editing the
+    # first pair appeared to do nothing. Keep them defined once only.
+    PDF_DATE_REGEX = re.compile(r'D:((?:19|20)\d{6})')
 
     def _get_pdf_date(self, filepath: str) -> Optional[str]:
         """Lightweight PDF document CreationDate extraction from PDF trailer header/footer."""

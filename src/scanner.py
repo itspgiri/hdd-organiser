@@ -23,10 +23,24 @@ GARBAGE_PREFIXES = (
 # Staging area for extracted archives; never user content.
 SKIP_ORGANIZER_DIRS = {".organizer_staging", ".Duplicates_Trash"}
 
-SKIP_SYSTEM_DIRS = {
-    ".Trash", ".thumbnails", ".fseventsd", ".Spotlight-V100", ".Trashes",
-    "node_modules", ".git", "__pycache__", ".venv", "venv", ".cache", "Caches", ".tmp",
-} | SKIP_ORGANIZER_DIRS
+# Operating-system internals. Never user data, not worth reporting.
+SKIP_OS_DIRS = {
+    ".Trash", ".Trashes", ".thumbnails", ".fseventsd", ".Spotlight-V100",
+}
+
+# Regenerable build output and dependency caches. These are *probably* junk,
+# but "Caches", "venv" and ".tmp" are also perfectly ordinary folder names a
+# person might use for real files. They are still skipped (restoring a
+# node_modules tree across 1.7TB is pointless), but they are now counted and
+# surfaced in the preview instead of disappearing without trace -- someone who
+# trusts the preview and then wipes the source should not lose a folder just
+# because of what they named it.
+SKIP_BUILD_DIRS = {
+    "node_modules", ".git", "__pycache__", ".venv", "venv",
+    ".cache", "Caches", ".tmp",
+}
+
+SKIP_SYSTEM_DIRS = SKIP_OS_DIRS | SKIP_BUILD_DIRS | SKIP_ORGANIZER_DIRS
 
 class Scanner:
     def __init__(self, categorizer: Categorizer, staging_root: Optional[str] = None):
@@ -47,6 +61,11 @@ class Scanner:
         self.gdrive_zips_extracted = 0
         self.gdrive_zip_names: List[str] = []
         self.processed_zips: Set[str] = set()
+        # Build/cache folders that were pruned. Recorded so the preview can
+        # tell the user what will not be transferred, rather than leaving them
+        # to discover it after wiping the source.
+        self.skipped_dirs: List[str] = []
+        self.skipped_dir_breakdown: Dict[str, int] = {}
 
     def is_garbage(self, filename: str) -> bool:
         if filename in GARBAGE_FILES:
@@ -190,14 +209,51 @@ class Scanner:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
-                start_time = time.time()
+                # The old guard was a flat 60-second cap, which no real Google
+                # Takeout archive can meet -- so the fast native unzip was
+                # always killed and the much slower Python fallback re-did the
+                # work from scratch. Watch for a genuine stall instead: as long
+                # as bytes keep landing in the staging directory, let it run.
+                try:
+                    archive_bytes = os.path.getsize(zip_path)
+                except OSError:
+                    archive_bytes = 0
+                # Allow ~1 minute per 100MB, floor 5 min, ceiling 6 hours.
+                hard_deadline = time.time() + min(
+                    max(300, (archive_bytes / (100 * 1024 * 1024)) * 60), 21600
+                )
+                stall_limit = 120  # seconds with zero new bytes written
+                last_size, last_change = 0, time.time()
+                last_report = 0.0
+
+                def _staged_bytes():
+                    total = 0
+                    for r, _d, fs in os.walk(staging_dir):
+                        for nm in fs:
+                            try:
+                                total += os.path.getsize(os.path.join(r, nm))
+                            except OSError:
+                                pass
+                    return total
+
                 while proc.poll() is None:
                     if cancel_check and cancel_check():
                         proc.kill()
                         proc.wait()
                         shutil.rmtree(staging_dir, ignore_errors=True)
                         return []
-                    if time.time() - start_time > 60: # 60s timeout safety
+
+                    now = time.time()
+                    if now - last_report >= 3:
+                        last_report = now
+                        grown = _staged_bytes()
+                        if grown > last_size:
+                            last_size, last_change = grown, now
+                            if progress_cb:
+                                mb = grown / (1024 * 1024)
+                                progress_cb(0, 0, f"📦 Unzipping {zip_count_str}: {zip_filename} ({mb:,.0f} MB extracted)...")
+
+                    if now - last_change > stall_limit or now > hard_deadline:
                         proc.kill()
                         proc.wait()
                         break
@@ -286,6 +342,17 @@ class Scanner:
                 unpruned_dirs = list(dirs)
 
                 # 1. Prune skipped system / heavy build / unzipped staging directories in-place BEFORE entering them
+                #
+                # Build/cache folders are recorded on the way past. They used to
+                # vanish with no trace in either the log or the preview, so a
+                # folder that merely happened to be named "Caches" or "venv"
+                # would never reach the destination and nobody would know.
+                for d in dirs:
+                    if d in SKIP_BUILD_DIRS:
+                        self.skipped_dir_breakdown[d] = self.skipped_dir_breakdown.get(d, 0) + 1
+                        if len(self.skipped_dirs) < 50:
+                            self.skipped_dirs.append(os.path.join(root, d))
+
                 dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
 
                 # 2. Check if this is a Code Project.

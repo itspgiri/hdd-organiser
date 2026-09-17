@@ -7,20 +7,53 @@ let lastWasPreview = false;
 let lastPreviewSummary = null;
 let allLogs = [];
 
+// Anything that comes off the user's disk -- file names, folder names, full
+// paths, log lines -- is untrusted markup. macOS only forbids "/" and NUL in a
+// file name, so < > & " ' are all legal and arrive verbatim from the scanner.
+// Every interpolation of disk-derived data into innerHTML must go through this.
+// Do NOT wrap app-generated markup in it; only the data being embedded.
+function escapeHtml(value) {
+    return String(value === null || value === undefined ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function startPolling() {
     if (pollInterval) clearInterval(pollInterval);
 
     pollInterval = setInterval(async () => {
         try {
             const res = await fetch('/api/status');
+            if (!res.ok) return;
             const data = await res.json();
 
-            updateProgressUI(data);
+            // "cancelling" is deliberately NOT terminal. The worker thread is
+            // still finishing the file in flight and still owns the checkpoint
+            // database; app.py's run_organizer() is the only thing allowed to
+            // settle on complete/error/cancelled. Keep polling until it does.
+            const isTerminal = data.status === 'complete'
+                || data.status === 'error'
+                || data.status === 'cancelled';
 
-            if (data.status === 'complete' || data.status === 'error' || data.status === 'cancelled') {
+            // Stop the timer BEFORE rendering. updateProgressUI() used to run
+            // first, and a single bad field in the payload threw past the
+            // clearInterval below, leaving the app polling forever with every
+            // button stuck disabled and no way out but force-quitting.
+            if (isTerminal) {
                 clearInterval(pollInterval);
                 pollInterval = null;
+            }
 
+            try {
+                updateProgressUI(data);
+            } catch (uiErr) {
+                console.error("Error rendering progress", uiErr);
+            }
+
+            if (isTerminal) {
                 const heading = document.getElementById('status-heading');
                 const doneBtn = document.getElementById('done-btn');
                 const startBtn = document.getElementById('start-btn');
@@ -46,8 +79,12 @@ function startPolling() {
                         document.getElementById('review-panel').classList.remove('hidden');
                     }
                     try { loadHistoryView(false); } catch (e) {}
+                } else if (data.status === 'cancelled') {
+                    if (heading) heading.innerText = "Operation Cancelled";
                 } else {
-                    if (heading) heading.innerText = "Operation Cancelled / Error";
+                    // The reason lives in state.message, which updateProgressUI
+                    // has already painted into #current-message above.
+                    if (heading) heading.innerText = "Operation Failed";
                 }
             }
 
@@ -143,8 +180,23 @@ async function startOrganizing() {
         return;
     }
     
-    if (source === dest || dest.startsWith(source)) {
-        alert("Safety Error: Destination folder cannot be inside the Source folder!");
+    // Fast pre-flight only. The authoritative check is validate_paths() in
+    // api_organizer.py, which resolves symlinks with realpath/commonpath.
+    //
+    // The old test was `source === dest || dest.startsWith(source)` on the raw
+    // strings, which was wrong in both directions: it blocked the perfectly
+    // safe /Volumes/Photos -> /Volumes/Photos_Backup pair, and it missed real
+    // nesting whenever the source box held the comma-separated list of folders
+    // the UI explicitly invites. Split the list and compare whole path
+    // segments so a sibling can never look like a child.
+    const stripTrailingSlash = p => p.trim().replace(/\/+$/, '');
+    const sources = source.split(',').map(stripTrailingSlash).filter(Boolean);
+    const destNorm = stripTrailingSlash(dest);
+    const clash = sources.find(s => s === destNorm
+        || destNorm.startsWith(s + '/')
+        || s.startsWith(destNorm + '/'));
+    if (clash) {
+        alert(`Safety Error: "${destNorm}" and "${clash}" are nested inside each other.\n\nChoose a destination outside every source folder.`);
         return;
     }
 
@@ -164,9 +216,9 @@ async function startOrganizing() {
                 excluded_projects: excludedProjects
             })
         });
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
         
-        if (data.success) {
+        if (response.ok && data.success) {
             lastWasPreview = isPreview;
             document.getElementById('confirm-box').classList.add('hidden');
             document.getElementById('review-panel').classList.add('hidden');
@@ -186,7 +238,7 @@ async function startOrganizing() {
             startPolling();
         } else {
 
-            alert("Error starting: " + data.error);
+            alert("Error starting: " + (data.error || `HTTP ${response.status}`));
             btn.disabled = false;
             btn.innerText = "Start Organizing";
         }
@@ -199,15 +251,52 @@ async function startOrganizing() {
 
 function renderPreviewDashboard(summary) {
     const dash = document.getElementById('preview-dashboard');
+
+    // Build this first so it can also be shown on the "nothing to copy" path
+    // below -- a source made up entirely of build/cache folders reports
+    // total_files === 0, and that is exactly when the user most needs to know
+    // why nothing is going to be transferred.
+    let skippedHtml = "";
+    const skippedBreakdown = summary && summary.skipped_dir_breakdown;
+    if (skippedBreakdown && Object.keys(skippedBreakdown).length > 0) {
+        const entries = Object.entries(skippedBreakdown).sort((a, b) => b[1] - a[1]);
+        const totalSkipped = entries.reduce((acc, kv) => acc + kv[1], 0);
+        const breakdownHtml = entries.map(([name, count]) =>
+            `<div style="padding: 1px 0;">• <strong>${escapeHtml(name)}</strong>: ${Number(count).toLocaleString()} folder(s)</div>`
+        ).join('');
+
+        const skippedSamples = summary.skipped_dirs || [];
+        const shown = skippedSamples.slice(0, 5);
+        let samplesHtml = "";
+        if (shown.length > 0) {
+            samplesHtml = `<div style="margin-top: 6px; opacity: 0.85; font-size: 10px; max-height: 70px; overflow-y: auto;">`
+                + shown.map(p => `<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">📁 ${escapeHtml(p)}</div>`).join('')
+                + (skippedSamples.length > shown.length
+                    ? `<div style="opacity: 0.7;">…and ${skippedSamples.length - shown.length} more</div>`
+                    : '')
+                + `</div>`;
+        }
+
+        skippedHtml = `
+        <div style="font-size: 11px; margin-top: 8px; padding: 8px 10px; background: rgba(243, 156, 18, 0.12); border-radius: 6px; border: 1px solid #f39c12;">
+            <div style="font-weight: bold; color: #f39c12;">⏭️ Build / cache folders that will NOT be copied (${totalSkipped.toLocaleString()}):</div>
+            <div style="margin-top: 4px;">${breakdownHtml}</div>
+            ${samplesHtml}
+            <div style="opacity: 0.85; font-size: 10px; margin-top: 4px;">
+                These are skipped on purpose and will not reach the destination. If you need one of them, move it out of the source folder before transferring.
+            </div>
+        </div>`;
+    }
+
     if (!summary || !summary.total_files) {
-        dash.innerHTML = "<p class='confirm-desc'>Preview Complete! Ready to transfer files.</p>";
+        dash.innerHTML = "<p class='confirm-desc'>Preview Complete! Ready to transfer files.</p>" + skippedHtml;
         return;
     }
     
     let catsHtml = "";
     if (summary.categories) {
         for (const [cat, count] of Object.entries(summary.categories)) {
-            catsHtml += `<button class="category-pill-btn" onclick="inspectCategoryFiles('${cat}')">📂 <strong>${cat}</strong>: ${count} <span style="opacity:0.7; font-size:9px;">(Click to preview)</span></button>`;
+            catsHtml += `<button class="category-pill-btn" data-category="${escapeHtml(cat)}">📂 <strong>${escapeHtml(cat)}</strong>: ${count} <span style="opacity:0.7; font-size:9px;">(Click to preview)</span></button>`;
         }
     }
 
@@ -218,8 +307,8 @@ function renderPreviewDashboard(summary) {
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 4px;">
                 <strong style="font-size: 12px;">💻 Intact Code Repositories (${summary.total_projects}):</strong>
                 <div style="display: flex; gap: 4px;">
-                    <button class="btn secondary" style="font-size: 10px; padding: 2px 6px;" onclick="selectAllProjects(true)">☑ Select All</button>
-                    <button class="btn secondary" style="font-size: 10px; padding: 2px 6px;" onclick="selectAllProjects(false)">☐ Deselect All</button>
+                    <button class="btn secondary" id="projects-select-all-btn" style="font-size: 10px; padding: 2px 6px;">☑ Select All</button>
+                    <button class="btn secondary" id="projects-deselect-all-btn" style="font-size: 10px; padding: 2px 6px;">☐ Deselect All</button>
                 </div>
             </div>
             <input type="text" id="project-search-filter" placeholder="🔍 Search code projects..." onkeyup="filterProjectsList()" style="font-size: 11px; padding: 4px 8px; margin-bottom: 6px; width: 100%; border-radius: 4px;">
@@ -232,12 +321,17 @@ function renderPreviewDashboard(summary) {
             const statusLabel = isExcluded 
                 ? '<span style="color: #e74c3c; font-size: 10px;">⚡ (Sort as Regular Files)</span>' 
                 : '<span style="color: #2ecc71; font-size: 10px;">✓ (Keep Intact under Code/)</span>';
+            // Paths travel in data-* attributes rather than inside an inline
+            // onclick="fn('...')" string. The old form only doubled backslashes,
+            // so a folder called "Priyanka's Portfolio" produced a SyntaxError
+            // and the button silently did nothing, while a folder containing a
+            // double quote could close the attribute and inject handlers.
             projsHtml += `
             <div class="project-row-item" style="margin-bottom: 4px; font-size: 11px;">
                 <label style="cursor: pointer; display: flex; align-items: center; gap: 6px;">
-                    <input type="checkbox" ${checkedAttr} onchange="onProjectCheckboxChange('${p.path.replace(/\\/g, '\\\\')}', this.checked)">
-                    <span style="${textStyle}">📂 <strong>${p.name}</strong> ${statusLabel}</span>
-                    <button class="btn secondary" style="font-size: 9px; padding: 1px 4px; margin-left: auto;" onclick="inspectProject('${p.path.replace(/\\/g, '\\\\')}', '${p.name}')">🔍 Inspect</button>
+                    <input type="checkbox" ${checkedAttr} class="project-exclude-checkbox" data-path="${escapeHtml(p.path)}">
+                    <span style="${textStyle}">📂 <strong>${escapeHtml(p.name)}</strong> ${statusLabel}</span>
+                    <button class="btn secondary project-inspect-btn" data-path="${escapeHtml(p.path)}" data-name="${escapeHtml(p.name)}" style="font-size: 9px; padding: 1px 4px; margin-left: auto;">🔍 Inspect</button>
                 </label>
             </div>`;
         });
@@ -246,7 +340,7 @@ function renderPreviewDashboard(summary) {
 
     let gdriveHtml = "";
     if (summary.gdrive_zips_extracted && summary.gdrive_zips_extracted > 0) {
-        const namesList = summary.gdrive_zip_names ? summary.gdrive_zip_names.join(', ') : '';
+        const namesList = summary.gdrive_zip_names ? summary.gdrive_zip_names.map(escapeHtml).join(', ') : '';
         gdriveHtml = `
         <div style="font-size: 11px; margin-top: 8px; padding: 6px 10px; background: rgba(10, 132, 255, 0.1); border-radius: 6px; border: 1px solid var(--primary-color);">
             📦 <strong>Auto-Unzipped ${summary.gdrive_zips_extracted} Google Drive Archive(s):</strong> ${namesList}
@@ -268,15 +362,15 @@ function renderPreviewDashboard(summary) {
     dash.innerHTML = `
         <div class="stat-grid">
             <div class="stat-card">
-                <div class="stat-val">${summary.total_files}</div>
+                <div class="stat-val">${escapeHtml(summary.total_files)}</div>
                 <div class="stat-lbl">Files Found</div>
             </div>
             <div class="stat-card">
-                <div class="stat-val">${summary.total_size}</div>
+                <div class="stat-val">${escapeHtml(summary.total_size)}</div>
                 <div class="stat-lbl">Total Size</div>
             </div>
             <div class="stat-card">
-                <div class="stat-val">${summary.free_space}</div>
+                <div class="stat-val">${escapeHtml(summary.free_space)}</div>
                 <div class="stat-lbl">Free HDD Space</div>
             </div>
         </div>
@@ -287,10 +381,28 @@ function renderPreviewDashboard(summary) {
         </div>
         ${projsHtml}
         ${garbageHtml}
+        ${skippedHtml}
         <div style="font-size: 11px; opacity: 0.7; margin-top: 10px; color: var(--success-color);">
             ✓ <strong>Safe Read-Only Preview:</strong> 0 files moved. Ready to organize.
         </div>
     `;
+
+    // Wire the generated controls up here: the markup above carries data only,
+    // never executable strings. Re-running renderPreviewDashboard() replaces
+    // the markup and re-attaches these, so the listeners stay in sync.
+    dash.querySelectorAll('.category-pill-btn').forEach(btn => {
+        btn.addEventListener('click', () => inspectCategoryFiles(btn.dataset.category));
+    });
+    dash.querySelectorAll('.project-inspect-btn').forEach(btn => {
+        btn.addEventListener('click', () => inspectProject(btn.dataset.path, btn.dataset.name));
+    });
+    dash.querySelectorAll('.project-exclude-checkbox').forEach(box => {
+        box.addEventListener('change', () => onProjectCheckboxChange(box.dataset.path, box.checked));
+    });
+    const selectAllBtn = document.getElementById('projects-select-all-btn');
+    if (selectAllBtn) selectAllBtn.addEventListener('click', () => selectAllProjects(true));
+    const deselectAllBtn = document.getElementById('projects-deselect-all-btn');
+    if (deselectAllBtn) deselectAllBtn.addEventListener('click', () => selectAllProjects(false));
 }
 
 
@@ -310,7 +422,7 @@ function inspectCategoryFiles(category) {
     if (samples.length === 0) {
         list.innerHTML = "<div style='opacity:0.7;'>No sample paths available for this category.</div>";
     } else {
-        list.innerHTML = samples.map(f => `<div>📄 ${f}</div>`).join('');
+        list.innerHTML = samples.map(f => `<div>📄 ${escapeHtml(f)}</div>`).join('');
     }
 
     modal.classList.remove('hidden');
@@ -359,14 +471,14 @@ function inspectGarbageFiles() {
     let bHtml = "<strong>System Garbage Breakdown:</strong><br>";
     if (lastPreviewSummary.garbage_breakdown) {
         for (const [gType, gCount] of Object.entries(lastPreviewSummary.garbage_breakdown)) {
-            bHtml += `<div style="padding: 2px 0;">• <strong>${gType}:</strong> ${gCount.toLocaleString()} files</div>`;
+            bHtml += `<div style="padding: 2px 0;">• <strong>${escapeHtml(gType)}:</strong> ${gCount.toLocaleString()} files</div>`;
         }
     }
     bList.innerHTML = bHtml;
 
     let sHtml = "";
     if (lastPreviewSummary.garbage_samples && lastPreviewSummary.garbage_samples.length > 0) {
-        sHtml = lastPreviewSummary.garbage_samples.map(p => `<div>📄 ${p}</div>`).join('');
+        sHtml = lastPreviewSummary.garbage_samples.map(p => `<div>📄 ${escapeHtml(p)}</div>`).join('');
     } else {
         sHtml = "<div>No sample paths available.</div>";
     }
@@ -393,14 +505,20 @@ function updateProgressUI(data) {
         } else {
             heading.innerText = lastWasPreview ? "🔍 Analyzing Preview..." : "⚡ Copying & Organizing Files...";
         }
+    } else if (data.status === 'cancelling' && heading) {
+        heading.innerText = "⛔ Cancelling — finishing the file in flight...";
     }
 
-    const percent = data.total > 0 ? Math.min(100, Math.round((data.progress / data.total) * 100)) : 0;
+    // Coerce defensively: a malformed or partial payload used to throw here on
+    // .toLocaleString(), which stranded the poller (see startPolling).
+    const progressVal = Number(data.progress ?? 0) || 0;
+    const totalVal = Number(data.total ?? 0) || 0;
+    const percent = totalVal > 0 ? Math.min(100, Math.round((progressVal / totalVal) * 100)) : 0;
     
     if (fill) fill.style.width = `${percent}%`;
     if (percentTxt) percentTxt.innerText = `${percent}%`;
     const etaText = data.eta ? ` • ${data.eta}` : '';
-    if (countTxt) countTxt.innerText = `${data.progress.toLocaleString()} / ${data.total.toLocaleString()}${etaText}`;
+    if (countTxt) countTxt.innerText = `${progressVal.toLocaleString()} / ${totalVal.toLocaleString()}${etaText}`;
     if (msgTxt && data.message) msgTxt.innerText = data.message;
     
     allLogs = data.logs || [];
@@ -413,9 +531,18 @@ function filterLogs() {
     const logContent = document.getElementById('log-content');
     if (!logContent) return;
     const filtered = query ? allLogs.filter(l => l.toLowerCase().includes(query)) : allLogs;
-    logContent.innerHTML = filtered.map(log => `<div>${log}</div>`).join('');
     const logContainer = document.getElementById('log-container');
-    if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
+
+    // Only follow the tail when the user is already parked at the bottom.
+    // Scrolling unconditionally on every 500ms poll made it impossible to read
+    // back through warnings (skipped FAT32 / iCloud files) during a transfer.
+    const nearBottom = !logContainer
+        || (logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight) < 50;
+
+    // Log lines embed raw file names straight from the scanner.
+    logContent.innerHTML = filtered.map(log => `<div>${escapeHtml(log)}</div>`).join('');
+
+    if (logContainer && nearBottom) logContainer.scrollTop = logContainer.scrollHeight;
 }
 
 async function inspectProject(path, name) {
@@ -436,6 +563,10 @@ async function inspectProject(path, name) {
 
     try {
         const response = await fetch(`/api/inspect_folder?path=${encodeURIComponent(path)}`);
+        if (!response.ok) {
+            list.innerHTML = `<div style='color: var(--danger-color);'>Could not read this folder (HTTP ${response.status}).</div>`;
+            return;
+        }
         const data = await response.json();
         
         if (!data.files || data.files.length === 0) {
@@ -443,7 +574,7 @@ async function inspectProject(path, name) {
             return;
         }
 
-        list.innerHTML = data.files.map(f => `<div>📄 ${f}</div>`).join('');
+        list.innerHTML = data.files.map(f => `<div>📄 ${escapeHtml(f)}</div>`).join('');
     } catch (e) {
         list.innerHTML = "<div>Error loading folder files</div>";
     }
@@ -507,6 +638,12 @@ async function loadProjectReview() {
 
     try {
         const response = await fetch(`/api/projects?dest=${encodeURIComponent(dest)}`);
+        // Distinguish "the request failed" from "there genuinely are none":
+        // a 403/500 used to render the reassuring empty-state below.
+        if (!response.ok) {
+            area.innerHTML = `<div style="color: var(--danger-color); font-size: 12px;">⚠️ Could not load code projects (HTTP ${response.status}). This is not the same as "none found" — please retry.</div>`;
+            return;
+        }
         const data = await response.json();
         
         if (!data.projects || data.projects.length === 0) {
@@ -519,14 +656,17 @@ async function loadProjectReview() {
             html += `
             <div class="project-item">
                 <div>
-                    <strong>📂 ${p.name}</strong> (${p.file_count} files)
+                    <strong>📂 ${escapeHtml(p.name)}</strong> (${escapeHtml(p.file_count)} files)
                 </div>
-                <button class="btn secondary" style="font-size: 11px; padding: 4px 10px;" onclick="dissolveProject('${p.path.replace(/\\/g, '\\\\')}')">
+                <button class="btn secondary project-dissolve-btn" data-path="${escapeHtml(p.path)}" style="font-size: 11px; padding: 4px 10px;">
                     Dissolve & Re-Sort
                 </button>
             </div>`;
         });
         area.innerHTML = html;
+        area.querySelectorAll('.project-dissolve-btn').forEach(btn => {
+            btn.addEventListener('click', () => dissolveProject(btn.dataset.path));
+        });
     } catch (e) {
         area.innerHTML = "<div>Error loading projects</div>";
     }
@@ -543,7 +683,11 @@ async function dissolveProject(projectPath) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ dest: dest, project_path: projectPath })
         });
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            alert(`Error dissolving project: ${data.error || `HTTP ${response.status}`}`);
+            return;
+        }
         alert(data.message);
         loadProjectReview();
     } catch (e) {
@@ -561,6 +705,12 @@ async function loadDuplicateCleaner() {
 
     try {
         const response = await fetch(`/api/duplicates?dest=${encodeURIComponent(dest)}`);
+        // A failed request must never render "Source drive is clean" -- the
+        // user may delete the source on the strength of that message.
+        if (!response.ok) {
+            area.innerHTML = `<div style="color: var(--danger-color); font-size: 12px;">⚠️ Could not check for duplicates (HTTP ${response.status}). This is <strong>not</strong> a clean bill of health — do not delete your source drive until this check succeeds.</div>`;
+            return;
+        }
         const data = await response.json();
         
         if (!data.duplicates || data.duplicates.length === 0) {
@@ -582,7 +732,7 @@ async function loadDuplicateCleaner() {
         <div style="font-size: 11px; max-height: 120px; overflow-y: auto;">`;
 
         data.duplicates.forEach(d => {
-            html += `<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0;">• ${d.source_path}</div>`;
+            html += `<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0;">• ${escapeHtml(d.source_path)}</div>`;
         });
         html += `</div>`;
         area.innerHTML = html;
@@ -601,7 +751,11 @@ async function trashAllDuplicates() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ source_paths: duplicateSourcePaths })
         });
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            alert(`Error moving duplicate files: ${data.error || `HTTP ${response.status}`}`);
+            return;
+        }
         alert(`Successfully moved ${data.count} duplicate files into .Duplicates_Trash with 0 Touch ID prompts!`);
         loadDuplicateCleaner();
     } catch (e) {
@@ -620,10 +774,49 @@ async function openDestinationInFinder() {
     }
 }
 
+// Deliberately NOT window.location.href. /api/export_csv answers 400/404/500
+// with plain text and no Content-Disposition, so the browser rendered the error
+// instead of downloading it -- which replaced the whole single-page UI with a
+// bare error string. Inside the pywebview window there is no back button, so
+// the only way out was to quit and relaunch, losing the selected paths.
+async function downloadCsvReport(dest) {
+    if (!dest) return;
+    const controller = new AbortController();
+    try {
+        // Probe first: this tells us whether the export will succeed without
+        // committing the window to a navigation we cannot undo.
+        const response = await fetch(
+            `/api/export_csv?dest=${encodeURIComponent(dest)}&token=${encodeURIComponent(window.API_TOKEN)}`,
+            { signal: controller.signal }
+        );
+        if (!response.ok) {
+            const detail = await response.text().catch(() => "");
+            alert(`Could not export the CSV audit report.\n\n${detail || `HTTP ${response.status}`}`);
+            return;
+        }
+        // The response is good, so stop the probe before its (potentially very
+        // large) body comes down the wire -- we only needed the status line.
+        controller.abort();
+
+        // Deliberately NOT a blob + <a download>. This app runs inside
+        // pywebview/WKWebView, which routinely ignores "download" on a blob:
+        // URL and produces no file and no error. A plain navigation to a
+        // response carrying Content-Disposition: attachment is handled
+        // natively. The probe above is what actually fixes the original bug:
+        // previously an error response (404 "No checkpoint database found")
+        // was navigated to directly, replacing the whole app with a bare error
+        // page and no way back.
+        window.location.href = `/api/export_csv?dest=${encodeURIComponent(dest)}&token=${encodeURIComponent(window.API_TOKEN)}`;
+    } catch (e) {
+        if (e && e.name === 'AbortError') return;
+        alert("Error exporting CSV audit report: " + e);
+    }
+}
+
 function downloadAuditReport() {
     const dest = document.getElementById('dest-path').value;
     if (!dest) return;
-    window.location.href = `/api/export_csv?dest=${encodeURIComponent(dest)}&token=${encodeURIComponent(window.API_TOKEN)}`;
+    downloadCsvReport(dest);
 }
 
 async function runVerificationChecker() {
@@ -635,10 +828,14 @@ async function runVerificationChecker() {
 
     try {
         const response = await fetch(`/api/verify_transfer?dest=${encodeURIComponent(dest)}`);
+        if (!response.ok) {
+            area.innerHTML = `<div style="color: var(--danger-color); font-size: 12px;">⚠️ Verification could not run (HTTP ${response.status}). Your files were <strong>not</strong> verified — do not delete the source drive.</div>`;
+            return;
+        }
         const data = await response.json();
         
         if (!data.success) {
-            area.innerHTML = `<div style="color: var(--danger-color); font-size: 12px;">⚠️ ${data.error}</div>`;
+            area.innerHTML = `<div style="color: var(--danger-color); font-size: 12px;">⚠️ ${escapeHtml(data.error)}</div>`;
             return;
         }
 
@@ -647,9 +844,9 @@ async function runVerificationChecker() {
             <div style="background: rgba(46, 204, 113, 0.15); border: 1px solid #2ecc71; padding: 12px; border-radius: 8px;">
                 <div style="color: #2ecc71; font-weight: bold; font-size: 14px;">🟢 100% Integrity Verified & Safe to Delete!</div>
                 <div style="font-size: 12px; margin-top: 6px;">
-                    • Total Files Checked: <strong>${data.total_files}</strong><br>
-                    • Successfully Verified Copied Files: <strong>${data.verified_count}</strong><br>
-                    • Skipped Duplicates (Intact at destination): <strong>${data.skipped_duplicates}</strong><br>
+                    • Total Files Checked: <strong>${escapeHtml(data.total_files)}</strong><br>
+                    • Successfully Verified Copied Files: <strong>${escapeHtml(data.verified_count)}</strong><br>
+                    • Skipped Duplicates (Intact at destination): <strong>${escapeHtml(data.skipped_duplicates)}</strong><br>
                     • Missing Files: <strong>0</strong><br>
                     • Corrupted / Mismatched Files: <strong>0</strong>
                 </div>
@@ -660,27 +857,31 @@ async function runVerificationChecker() {
         } else {
             let errorHtml = "";
             if (data.missing_count > 0) {
-                errorHtml += `<div><strong>Missing Files (${data.missing_count}):</strong> ${data.missing_list.join(', ')}</div>`;
+                errorHtml += `<div><strong>Missing Files (${escapeHtml(data.missing_count)}):</strong> ${data.missing_list.map(escapeHtml).join(', ')}</div>`;
             }
             if (data.mismatched_count > 0) {
-                errorHtml += `<div><strong>Mismatched Files (${data.mismatched_count}):</strong> ${data.mismatched_list.join(', ')}</div>`;
+                errorHtml += `<div><strong>Mismatched Files (${escapeHtml(data.mismatched_count)}):</strong> ${data.mismatched_list.map(escapeHtml).join(', ')}</div>`;
             }
             area.innerHTML = `
             <div style="background: rgba(231, 76, 60, 0.15); border: 1px solid #e74c3c; padding: 12px; border-radius: 8px;">
                 <div style="color: #e74c3c; font-weight: bold; font-size: 14px;">⚠️ Verification Warning: Mismatches Found</div>
                 <div style="font-size: 12px; margin-top: 6px;">
-                    • Total Files Checked: <strong>${data.total_files}</strong><br>
-                    • Verified Files: <strong>${data.verified_count}</strong><br>
-                    • Missing Files: <strong>${data.missing_count}</strong><br>
-                    • Corrupted / Mismatched Files: <strong>${data.mismatched_count}</strong>
+                    • Total Files Checked: <strong>${escapeHtml(data.total_files)}</strong><br>
+                    • Verified Files: <strong>${escapeHtml(data.verified_count)}</strong><br>
+                    • Missing Files: <strong>${escapeHtml(data.missing_count)}</strong><br>
+                    • Corrupted / Mismatched Files: <strong>${escapeHtml(data.mismatched_count)}</strong>
                 </div>
                 <div style="font-size: 11px; margin-top: 8px;">
                     ${errorHtml}
                 </div>
                 <div style="margin-top: 10px;">
-                    <button class="btn secondary" style="font-size: 11px; padding: 6px 12px;" onclick="repairAndResync('${dest.replace(/\\/g, '\\\\')}')">⚡ Repair & Re-Sync Failed Files</button>
+                    <button class="btn secondary" id="repair-resync-btn" data-dest="${escapeHtml(dest)}" style="font-size: 11px; padding: 6px 12px;">⚡ Repair & Re-Sync Failed Files</button>
                 </div>
             </div>`;
+            const repairBtn = document.getElementById('repair-resync-btn');
+            if (repairBtn) {
+                repairBtn.addEventListener('click', () => repairAndResync(repairBtn.dataset.dest));
+            }
         }
     } catch (e) {
         area.innerHTML = "<div>Error running verification check</div>";
@@ -695,18 +896,37 @@ async function repairAndResync(destPath) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({dest: destPath})
         });
-        const data = await response.json();
-        if (data.success) {
-            alert(`Purged ${data.repaired_count} failed file record(s). Re-running transfer to copy missing & mismatched files...`);
-            // Run transfer again to re-sync
-            const confirmBtn = document.getElementById("confirm-transfer-btn");
-            if (confirmBtn) {
-                confirmBtn.click();
-            } else {
-                runVerification(destPath);
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data.success) {
+            const purged = data.repaired_count || 0;
+            if (purged === 0) {
+                alert("No repairable records were found, so nothing was re-queued. Your destination already matches the checkpoint database.");
+                return;
             }
+
+            // Run transfer again to re-sync.
+            //
+            // This used to look for a "confirm-transfer-btn" element that does
+            // not exist in index.html (the real id is "confirm-go-btn") and
+            // then fall through to runVerification(), which is not defined
+            // anywhere. The records had already been purged server-side, so the
+            // user was told the files were being re-copied when in fact a
+            // ReferenceError was thrown and nothing happened at all.
+            const source = document.getElementById('source-path').value;
+            if (!source) {
+                alert(`Purged ${purged} failed file record(s).\n\nThe original source folder is not set, so the re-copy could not be started automatically. Select the source folder on the Setup screen and click "Start Organizing" to re-copy them.`);
+                document.getElementById('dest-path').value = destPath;
+                showView('setup-view');
+                return;
+            }
+
+            alert(`Purged ${purged} failed file record(s). Starting a transfer now to re-copy the missing & mismatched files...`);
+            document.getElementById('dest-path').value = destPath;
+            document.getElementById('preview-mode').checked = false;
+            lastWasPreview = false;
+            await startOrganizing();
         } else {
-            alert(`Repair error: ${data.error}`);
+            alert(`Repair error: ${data.error || `HTTP ${response.status}`}`);
         }
     } catch (e) {
         alert("Error connecting to server to repair transfer.");
@@ -723,6 +943,10 @@ async function loadHistoryView(shouldNavigate = true) {
 
     try {
         const response = await fetch('/api/history');
+        if (!response.ok) {
+            container.innerHTML = `<div style="color: var(--danger-color); font-size: 12px; padding: 20px; text-align: center;">⚠️ Could not load past runs (HTTP ${response.status}). Your history has not been lost — please retry.</div>`;
+            return;
+        }
         const data = await response.json();
         const runs = data.history || [];
 
@@ -738,30 +962,39 @@ async function loadHistoryView(shouldNavigate = true) {
             html += `
             <div style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 12px; margin-bottom: 12px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <strong style="font-size: 13px;">🕒 ${run.timestamp}</strong>
-                    <span style="font-size: 10px; background: ${badgeColor}; color: #fff; padding: 2px 8px; border-radius: 10px; font-weight: bold;">${run.status}</span>
+                    <strong style="font-size: 13px;">🕒 ${escapeHtml(run.timestamp)}</strong>
+                    <span style="font-size: 10px; background: ${badgeColor}; color: #fff; padding: 2px 8px; border-radius: 10px; font-weight: bold;">${escapeHtml(run.status)}</span>
                 </div>
                 <div style="font-size: 11px; opacity: 0.9; margin-bottom: 4px;">
-                    📂 <strong>Source:</strong> ${run.source}<br>
-                    🎯 <strong>Destination:</strong> ${run.dest}
+                    📂 <strong>Source:</strong> ${escapeHtml(run.source)}<br>
+                    🎯 <strong>Destination:</strong> ${escapeHtml(run.dest)}
                 </div>
                 <div style="font-size: 11px; opacity: 0.7; margin-bottom: 8px;">
-                    📊 <strong>Files:</strong> ${run.total_files} files (${run.total_size}) • <strong>Code Projects:</strong> ${run.projects_count || 0}
+                    📊 <strong>Files:</strong> ${escapeHtml(run.total_files)} files (${escapeHtml(run.total_size)}) • <strong>Code Projects:</strong> ${escapeHtml(run.projects_count || 0)}
                 </div>
                 <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
-                    <button class="btn secondary" style="font-size: 10px; padding: 4px 8px;" onclick="downloadHistoryCSV('${run.dest.replace(/\\/g, '\\\\')}')">
+                    <button class="btn secondary history-csv-btn" data-dest="${escapeHtml(run.dest)}" style="font-size: 10px; padding: 4px 8px;">
                         📊 Download CSV Audit Log
                     </button>
-                    <button class="btn secondary" style="font-size: 10px; padding: 4px 8px;" onclick="verifyHistoryRun('${run.dest.replace(/\\/g, '\\\\')}')">
+                    <button class="btn secondary history-verify-btn" data-dest="${escapeHtml(run.dest)}" style="font-size: 10px; padding: 4px 8px;">
                         ✅ Run Integrity Check
                     </button>
-                    <button class="btn secondary" style="font-size: 10px; padding: 4px 8px;" onclick="openHistoryFinder('${run.dest.replace(/\\/g, '\\\\')}')">
+                    <button class="btn secondary history-finder-btn" data-dest="${escapeHtml(run.dest)}" style="font-size: 10px; padding: 4px 8px;">
                         📂 Open Destination in Finder
                     </button>
                 </div>
             </div>`;
         });
         container.innerHTML = html;
+        container.querySelectorAll('.history-csv-btn').forEach(btn => {
+            btn.addEventListener('click', () => downloadHistoryCSV(btn.dataset.dest));
+        });
+        container.querySelectorAll('.history-verify-btn').forEach(btn => {
+            btn.addEventListener('click', () => verifyHistoryRun(btn.dataset.dest));
+        });
+        container.querySelectorAll('.history-finder-btn').forEach(btn => {
+            btn.addEventListener('click', () => openHistoryFinder(btn.dataset.dest));
+        });
     } catch (e) {
         container.innerHTML = "<div>Error loading past runs history</div>";
     }
@@ -769,7 +1002,7 @@ async function loadHistoryView(shouldNavigate = true) {
 
 function downloadHistoryCSV(destPath) {
     if (!destPath) return;
-    window.location.href = `/api/export_csv?dest=${encodeURIComponent(destPath)}&token=${encodeURIComponent(window.API_TOKEN)}`;
+    downloadCsvReport(destPath);
 }
 
 async function verifyHistoryRun(destPath) {
@@ -802,25 +1035,46 @@ async function cancelCurrentOperation() {
         return;
     }
     const cancelBtn = document.getElementById('cancel-btn');
+    const startBtn = document.getElementById('start-btn');
     if (cancelBtn) {
         cancelBtn.disabled = true;
         cancelBtn.innerText = "Cancelling...";
     }
+    // Keep Start locked out. /api/cancel only requests the stop -- the worker
+    // thread is still copying and still holds the checkpoint database, and it
+    // is the only thing that may declare a terminal status. Re-enabling Start
+    // here is what previously let a second organizer run against the same DB.
+    // startPolling()'s terminal branch restores both buttons.
+    if (startBtn) {
+        startBtn.disabled = true;
+        startBtn.innerText = "Cancelling...";
+    }
     try {
-        await fetch('/api/cancel', { method: 'POST' });
+        const response = await fetch('/api/cancel', { method: 'POST' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.success === false) {
+            alert(`Could not cancel: ${data.error || `HTTP ${response.status}`}`);
+            if (cancelBtn) {
+                cancelBtn.disabled = false;
+                cancelBtn.innerText = "⛔ Cancel Operation";
+            }
+            if (startBtn) {
+                startBtn.disabled = false;
+                startBtn.innerText = "Start Organizing";
+            }
+            return;
+        }
         const heading = document.getElementById('status-heading');
-        if (heading) heading.innerText = "Operation Cancelled";
-        const doneBtn = document.getElementById('done-btn');
-        if (doneBtn) doneBtn.disabled = false;
-        const startBtn = document.getElementById('start-btn');
+        if (heading) heading.innerText = "⛔ Cancelling — finishing the file in flight...";
+    } catch (e) {
+        alert("Error cancelling operation: " + e);
+        if (cancelBtn) {
+            cancelBtn.disabled = false;
+            cancelBtn.innerText = "⛔ Cancel Operation";
+        }
         if (startBtn) {
             startBtn.disabled = false;
             startBtn.innerText = "Start Organizing";
         }
-    } catch (e) {
-        alert("Error cancelling operation: " + e);
     }
 }
-
-
-
