@@ -10,7 +10,7 @@
     "Documents/Text": [".txt", ".rtf", ".md"],
     "Creative/Projects": [".psd", ".ai", ".xd", ".fig", ".sketch"],
     "Creative/Audio": [".mp3", ".wav", ".aac", ".flac"],
-    "Archives": [".zip", ".tar", ".gz", ".tgz", ".rar", ".7z"],
+    "Archives": [".zip", ".tar", ".gz", ".tgz", ".bz2", ".tbz2", ".xz", ".txz", ".zst", ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".rar", ".7z"],
     "E-Books": [".epub", ".mobi"],
     "Code/Snippets": [".py", ".js", ".html", ".css", ".cpp", ".sh"]
   },

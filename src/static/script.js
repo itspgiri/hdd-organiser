@@ -6,6 +6,11 @@ let pollInterval = null;
 let lastWasPreview = false;
 let lastPreviewSummary = null;
 let allLogs = [];
+let isTransferActive = false;
+
+function onSourceInputChanged() {
+    excludedProjects = [];
+}
 
 // Anything that comes off the user's disk -- file names, folder names, full
 // paths, log lines -- is untrusted markup. macOS only forbids "/" and NUL in a
@@ -43,6 +48,7 @@ function startPolling() {
             // clearInterval below, leaving the app polling forever with every
             // button stuck disabled and no way out but force-quitting.
             if (isTerminal) {
+                isTransferActive = false;
                 clearInterval(pollInterval);
                 pollInterval = null;
             }
@@ -105,6 +111,9 @@ function selectDestMode(mode) {
 
 
 function showView(viewId) {
+    if (isTransferActive && viewId !== 'progress-view') {
+        return;
+    }
     if (viewHistory[viewHistory.length - 1] !== viewId) {
         viewHistory.push(viewId);
     }
@@ -113,7 +122,7 @@ function showView(viewId) {
 
     // Update back button & breadcrumbs
     const backBtn = document.getElementById('nav-back-btn');
-    backBtn.style.display = viewHistory.length > 1 ? 'inline-block' : 'none';
+    backBtn.style.display = (viewHistory.length > 1 && !isTransferActive) ? 'inline-block' : 'none';
 
     document.querySelectorAll('.crumb').forEach(c => c.classList.remove('active'));
     if (viewId === 'guide-view') document.getElementById('crumb-guide').classList.add('active');
@@ -126,6 +135,7 @@ function showView(viewId) {
 }
 
 function navigateBack() {
+    if (isTransferActive) return;
     if (viewHistory.length > 1) {
         viewHistory.pop();
         const prevView = viewHistory[viewHistory.length - 1];
@@ -157,9 +167,17 @@ async function selectFolder(type) {
         const data = await response.json();
         if (data.folder) {
             const input = document.getElementById(`${type}-path`);
-            if (type === 'source' && input.value.trim().length > 0) {
-                if (!input.value.includes(data.folder)) {
-                    input.value = input.value + ", " + data.folder;
+            if (type === 'source') {
+                const existing = input.value.split(',').map(s => s.trim()).filter(Boolean);
+                if (existing.length > 0) {
+                    if (!existing.includes(data.folder)) {
+                        existing.push(data.folder);
+                        input.value = existing.join(', ');
+                        excludedProjects = [];
+                    }
+                } else {
+                    input.value = data.folder;
+                    excludedProjects = [];
                 }
             } else {
                 input.value = data.folder;
@@ -189,7 +207,7 @@ async function startOrganizing() {
     // nesting whenever the source box held the comma-separated list of folders
     // the UI explicitly invites. Split the list and compare whole path
     // segments so a sibling can never look like a child.
-    const stripTrailingSlash = p => p.trim().replace(/\/+$/, '');
+    const stripTrailingSlash = p => p.trim().normalize('NFD').replace(/\/+$/, '');
     const sources = source.split(',').map(stripTrailingSlash).filter(Boolean);
     const destNorm = stripTrailingSlash(dest);
     const clash = sources.find(s => s === destNorm
@@ -198,6 +216,11 @@ async function startOrganizing() {
     if (clash) {
         alert(`Safety Error: "${destNorm}" and "${clash}" are nested inside each other.\n\nChoose a destination outside every source folder.`);
         return;
+    }
+
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
     }
 
     const btn = document.getElementById('start-btn');
@@ -219,6 +242,7 @@ async function startOrganizing() {
         const data = await response.json().catch(() => ({}));
         
         if (response.ok && data.success) {
+            isTransferActive = true;
             lastWasPreview = isPreview;
             document.getElementById('confirm-box').classList.add('hidden');
             document.getElementById('review-panel').classList.add('hidden');
@@ -288,7 +312,7 @@ function renderPreviewDashboard(summary) {
         </div>`;
     }
 
-    if (!summary || !summary.total_files) {
+    if (!summary || (!summary.total_files && !summary.total_projects)) {
         dash.innerHTML = "<p class='confirm-desc'>Preview Complete! Ready to transfer files.</p>" + skippedHtml;
         return;
     }
@@ -684,8 +708,8 @@ async function dissolveProject(projectPath) {
             body: JSON.stringify({ dest: dest, project_path: projectPath })
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) {
-            alert(`Error dissolving project: ${data.error || `HTTP ${response.status}`}`);
+        if (!response.ok || data.success === false) {
+            alert(`Error dissolving project: ${data.error || data.message || `HTTP ${response.status}`}`);
             return;
         }
         alert(data.message);
@@ -696,6 +720,7 @@ async function dissolveProject(projectPath) {
 }
 
 let duplicateSourcePaths = [];
+let trashedSourcePaths = [];
 
 async function loadDuplicateCleaner() {
     const dest = document.getElementById('dest-path').value;
@@ -712,29 +737,58 @@ async function loadDuplicateCleaner() {
             return;
         }
         const data = await response.json();
-        
-        if (!data.duplicates || data.duplicates.length === 0) {
+        const duplicates = Array.isArray(data.duplicates) ? data.duplicates : [];
+        const trashed = Array.isArray(data.trashed) ? data.trashed : [];
+
+        duplicateSourcePaths = duplicates.map(d => d.source_path);
+        trashedSourcePaths = trashed.map(t => t.source_path);
+
+        if (duplicates.length === 0 && trashed.length === 0) {
             area.innerHTML = "<div style='font-size: 12px; opacity: 0.7;'>✓ No duplicate source files were skipped. Source drive is clean.</div>";
             return;
         }
 
-        duplicateSourcePaths = data.duplicates.map(d => d.source_path);
-        let totalSize = data.duplicates.reduce((acc, curr) => acc + (curr.size || 0), 0);
-        let sizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+        let html = '';
 
-        let html = `
-        <div style="margin-bottom: 10px;">
-            <strong>Found ${data.duplicates.length} Duplicate Files (${sizeMB} MB) on Source Drive</strong>
-            <button class="btn primary" style="font-size: 11px; padding: 6px 12px; float: right;" onclick="trashAllDuplicates()">
-                🗑️ Move ${data.duplicates.length} Duplicates to Trash
-            </button>
-        </div>
-        <div style="font-size: 11px; max-height: 120px; overflow-y: auto;">`;
+        if (duplicates.length > 0) {
+            let totalSize = duplicates.reduce((acc, curr) => acc + (curr.size || 0), 0);
+            let sizeMB = (totalSize / (1024 * 1024)).toFixed(2);
 
-        data.duplicates.forEach(d => {
-            html += `<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0;">• ${escapeHtml(d.source_path)}</div>`;
-        });
-        html += `</div>`;
+            html += `
+            <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <strong>Found ${duplicates.length} Duplicate Files (${sizeMB} MB) on Source Drive</strong>
+                <button class="btn primary" style="font-size: 11px; padding: 6px 12px;" onclick="trashAllDuplicates()">
+                    🗑️ Move ${duplicates.length} Duplicates to Trash
+                </button>
+            </div>
+            <div style="font-size: 11px; max-height: 120px; overflow-y: auto; margin-bottom: ${trashed.length > 0 ? '12px' : '0'};">`;
+
+            duplicates.forEach(d => {
+                html += `<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0;">• ${escapeHtml(d.source_path)}</div>`;
+            });
+            html += `</div>`;
+        } else {
+            html += `<div style="font-size: 12px; opacity: 0.7; margin-bottom: 10px;">✓ All detected duplicates on the source drive have been isolated in <code>.Duplicates_Trash</code>.</div>`;
+        }
+
+        if (trashed.length > 0) {
+            let trashedSize = trashed.reduce((acc, curr) => acc + (curr.size || 0), 0);
+            let trashedMB = (trashedSize / (1024 * 1024)).toFixed(2);
+            html += `
+            <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; margin-top: 8px;">
+                <div style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <strong>♻️ ${trashed.length} Isolated Duplicate(s) in <code>.Duplicates_Trash</code> (${trashedMB} MB)</strong>
+                    <button class="btn secondary" style="font-size: 11px; padding: 6px 12px;" onclick="restoreAllDuplicates()">
+                        ♻️ Restore ${trashed.length} File${trashed.length === 1 ? '' : 's'} to Original Folder
+                    </button>
+                </div>
+                <div style="font-size: 11px; max-height: 100px; overflow-y: auto; opacity: 0.85;">`;
+            trashed.forEach(t => {
+                html += `<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0;">↩ ${escapeHtml(t.source_path)}</div>`;
+            });
+            html += `</div></div>`;
+        }
+
         area.innerHTML = html;
     } catch (e) {
         area.innerHTML = "<div>Error loading duplicates</div>";
@@ -745,21 +799,56 @@ async function trashAllDuplicates() {
     if (!confirm(`Are you sure you want to isolate ${duplicateSourcePaths.length} duplicate files on your SOURCE drive into a .Duplicates_Trash folder?`)) {
         return;
     }
+    const dest = document.getElementById('dest-path').value;
     try {
         const response = await fetch('/api/trash_duplicates', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ source_paths: duplicateSourcePaths })
+            body: JSON.stringify({ source_paths: duplicateSourcePaths, dest: dest })
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) {
+        if (!response.ok || data.success === false) {
             alert(`Error moving duplicate files: ${data.error || `HTTP ${response.status}`}`);
             return;
         }
-        alert(`Successfully moved ${data.count} duplicate files into .Duplicates_Trash with 0 Touch ID prompts!`);
+        let msg = `Successfully moved ${data.count} duplicate files into .Duplicates_Trash with 0 Touch ID prompts!`;
+        if (data.refused && data.refused.length > 0) {
+            msg += `\n\nSkipped ${data.refused.length} unverified/failed file(s).`;
+        }
+        alert(msg);
         loadDuplicateCleaner();
     } catch (e) {
         alert("Error moving duplicate files: " + e);
+    }
+}
+
+async function restoreAllDuplicates() {
+    if (!trashedSourcePaths || trashedSourcePaths.length === 0) {
+        return;
+    }
+    if (!confirm(`Restore ${trashedSourcePaths.length} file(s) from .Duplicates_Trash back to their original source locations?`)) {
+        return;
+    }
+    const dest = document.getElementById('dest-path').value;
+    try {
+        const response = await fetch('/api/restore_duplicates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source_paths: trashedSourcePaths, dest: dest })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.success === false) {
+            alert(`Error restoring duplicate files: ${data.error || `HTTP ${response.status}`}`);
+            return;
+        }
+        let msg = `Successfully restored ${data.count} file(s) back to their original folders!`;
+        if (data.refused && data.refused.length > 0) {
+            msg += `\n\nSkipped ${data.refused.length} file(s) that could not be safely restored.`;
+        }
+        alert(msg);
+        loadDuplicateCleaner();
+    } catch (e) {
+        alert("Error restoring duplicate files: " + e);
     }
 }
 
@@ -935,6 +1024,7 @@ async function repairAndResync(destPath) {
 
 
 async function loadHistoryView(shouldNavigate = true) {
+    if (shouldNavigate && isTransferActive) return;
     if (shouldNavigate) showView('history-view');
     const container = document.getElementById('history-list-container');
     if (!container) return;
@@ -1023,7 +1113,11 @@ async function openHistoryFinder(destPath) {
 async function clearHistoryLog() {
     if (!confirm("Are you sure you want to clear all past run history?")) return;
     try {
-        await fetch('/api/clear_history', { method: 'POST' });
+        const response = await fetch('/api/clear_history', { method: 'POST' });
+        if (!response.ok) {
+            alert(`Error clearing history (HTTP ${response.status})`);
+            return;
+        }
         loadHistoryView();
     } catch (e) {
         alert("Error clearing history");

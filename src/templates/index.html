@@ -80,7 +80,7 @@
             <div class="form-group" style="margin-top: 20px;">
                 <label>1. Select Messy Source Folder(s) to Sort</label>
                 <div class="input-row">
-                    <input type="text" id="source-path" placeholder="Choose folders or enter multiple paths separated by commas...">
+                    <input type="text" id="source-path" onchange="onSourceInputChanged()" placeholder="Choose folders or enter multiple paths separated by commas...">
                     <button class="btn secondary" onclick="selectFolder('source')">Browse</button>
                 </div>
                 <p class="small-hint">💡 Tip: You can select multiple source folders or separate multiple paths with commas!</p>
@@ -105,7 +105,7 @@
             <div class="form-group">
                 <label>3. Select Destination Folder</label>
                 <div class="input-row">
-                    <input type="text" id="dest-path" readonly placeholder="Choose destination folder...">
+                    <input type="text" id="dest-path" placeholder="Choose or enter destination folder...">
                     <button class="btn secondary" onclick="selectFolder('dest')">Browse</button>
                 </div>
             </div>
@@ -152,7 +152,7 @@
                 <div class="confirm-title">📊 Dry-Run Scan Results Summary</div>
                 <div id="preview-dashboard" class="preview-dashboard" style="margin-top: 10px;"></div>
                 <div class="actions sticky-actions" style="margin-top: 15px; display: flex; gap: 10px;">
-                    <button class="btn secondary" onclick="showView('setup-view')" style="flex: 1;">◄ Back to Setup</button>
+                    <button class="btn secondary" onclick="resetToSetup()" style="flex: 1;">◄ Back to Setup</button>
                     <button class="btn success-btn" id="confirm-go-btn" onclick="executeFullCopy()" style="flex: 2;">🚀 YES, Execute Full Transfer!</button>
                 </div>
             </div>
@@ -227,7 +227,7 @@
             </div>
 
             <div class="actions" id="default-actions" style="margin-top: 20px;">
-                <button class="btn secondary full-width" id="done-btn" onclick="showView('setup-view')" disabled>Return to Setup</button>
+                <button class="btn secondary full-width" id="done-btn" onclick="resetToSetup()" disabled>Return to Setup</button>
             </div>
         </div>
     </main>

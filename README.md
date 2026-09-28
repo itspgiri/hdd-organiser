@@ -106,7 +106,7 @@ After organization completes:
 - **📂 Open Destination Folder in Finder**: 1-click button opens your organized HDD directory directly in macOS Finder.
 - **📊 Export CSV Audit Log**: Download a full spreadsheet report detailing every file's original path, new path, file size, timestamp, and duplicate status.
 - **🔍 Review Code Projects & Dissolve**: View all project folders under `Code/`. Click **`Dissolve & Re-Sort`** to break open any folder mistakenly identified as a code project and categorize its inner files.
-- **🗑️ Clean Source Duplicates**: View skipped duplicate files on your source drive and click **`Move Duplicates to Trash`** to reclaim space on your original HDD.
+- **🗑️ Clean Source Duplicates & 1-Click Restore**: View skipped duplicate files on your source drive, click **`Move Duplicates to Trash`** to isolate them in `.Duplicates_Trash`, and use **`♻️ Restore Files to Original Folder`** at any time for a 1-click undo back to their exact original source locations.
 
 ---
 
@@ -171,7 +171,7 @@ If macOS does not automatically show your external HDD:
 * **Spotlight Thrash Protection**: Writes `.metadata_never_index` to prevent Spotlight indexers from thrashing your HDD.
 * **Complete Metadata Preservation**: Every copy path — the native macOS `copyfile` syscall, the `copy2` fallback, and the raw-bytes fallback used on exFAT/FAT32 — preserves modification time, creation time, POSIX permissions, and extended attributes (Finder tags, comments, and "where from" URLs). This applies to loose files and to files inside code projects alike.
 * **Byte-Exact Duplicate Detection**: A file is only ever skipped as a duplicate after a full byte-for-byte comparison. Sampled hashes are used to find *candidates*, never to make the final call.
-* **Re-Verified Duplicate Deletion**: "Clean Source Duplicates" will not move a source file to the Trash unless the surviving twin still exists at the destination **and** is confirmed byte-identical at that moment. Anything that fails the re-check is reported back to you and left untouched.
+* **Re-Verified Duplicate Isolation & 1-Click Undo**: "Clean Source Duplicates" will not move a source file into `.Duplicates_Trash` unless the surviving twin still exists at the destination **and** is confirmed byte-identical at that moment. Anything that fails the re-check is reported back to you and left untouched, and any isolated file can be restored back to its original path with one click (`♻️ Restore Files to Original Folder`).
 * **Ownership-Aware Repair**: Repair only deletes a destination file when exactly one database record claims it and no successful copy owns that path, so a healthy file can never be removed on behalf of a failed one.
 * **Authenticated Local API**: The local server mints a fresh token per launch; every `/api/` route requires it, so no other page or process on your Mac can drive the organizer.
 * **Off-Source Staging**: Google Takeout archives are unzipped to the destination (or the system temp dir), never onto the source drive, and staged copies are cleaned up after a successful run.

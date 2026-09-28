@@ -4,19 +4,79 @@ import shutil
 import sqlite3
 import subprocess
 import threading
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, Tuple, Set, List, Optional
 
-from .categorizer import Categorizer
-from .scanner import Scanner
+from .categorizer import Categorizer, split_filename_ext
+from .scanner import (
+    Scanner, split_source_paths, SKIP_SYSTEM_DIRS, SKIP_ORGANIZER_DIRS,
+    GARBAGE_FILES,
+)
 from .dates import DateExtractor
 from .file_ops import (
     FileEngine, safe_copy, restore_timestamps, copy_project_intact,
-    project_already_copied, files_are_identical,
+    project_already_copied, files_are_identical, PROJECT_IGNORE_PATTERNS,
+    _force_remove, _clear_immutable,
 )
 
 # Video containers Apple pairs with a still to make a Live Photo.
 LIVE_PHOTO_VIDEO_EXTS = ("mov", "mp4")
+LIVE_PHOTO_STILL_EXTS = ("heic", "heif", "jpg", "jpeg")
+
+
+def _live_photo_norm_key(file_path: str) -> Tuple[str, str]:
+    """Returns a case- and Unicode-normalized (directory, stem) key for Live Photo pairing."""
+    dir_name, filename = os.path.split(file_path)
+    name_only, _ext = split_filename_ext(filename)
+    dir_norm = os.path.normcase(os.path.abspath(dir_name))
+    stem_norm = unicodedata.normalize("NFC", name_only).lower()
+    return (dir_norm, stem_norm)
+
+
+def build_live_photo_dates(files_to_process: List[str], dates: DateExtractor) -> Dict[Tuple[str, str], Tuple[str, str]]:
+    """Pre-computes authoritative capture dates for Live Photo pairs.
+
+    Indexes both HEIC/HEIF stills and JPG/JPEG stills that share a folder and
+    stem with a companion .mov/.mp4 video, storing both normalized and raw keys
+    so neither the still nor the video needs to re-run extract_date.
+    """
+    video_keys: Set[Tuple[str, str]] = set()
+    for fp in files_to_process:
+        _, ext = split_filename_ext(os.path.basename(fp))
+        if ext.lstrip(".").lower() in LIVE_PHOTO_VIDEO_EXTS:
+            video_keys.add(_live_photo_norm_key(fp))
+
+    live_photo_dates: Dict[Tuple[str, str], Tuple[str, str]] = {}
+    for fp in files_to_process:
+        filename = os.path.basename(fp)
+        name_only, raw_ext = split_filename_ext(filename)
+        ext = raw_ext.lstrip(".").lower()
+        if ext not in LIVE_PHOTO_STILL_EXTS:
+            continue
+        norm_key = _live_photo_norm_key(fp)
+        # Always index HEIC/HEIF, or JPG/JPEG when a companion video exists in the same directory
+        if ext in ("heic", "heif") or norm_key in video_keys:
+            y, m = dates.extract_date(fp)
+            if y and m:
+                dir_name = os.path.dirname(fp)
+                live_photo_dates[norm_key] = (y, m)
+                live_photo_dates[(dir_name, name_only)] = (y, m)
+    return live_photo_dates
+
+
+def _is_apfs_volume(path: str) -> bool:
+    """Returns True if `path` resides on an APFS filesystem supporting copy-on-write clones."""
+    try:
+        res = subprocess.run(
+            ["df", "-T", "apfs", path],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
 
 
 def compute_relative_destination(categorizer, dates, file_path: str,
@@ -33,9 +93,10 @@ def compute_relative_destination(categorizer, dates, file_path: str,
         return os.path.join(category, filename)
 
     live_photo_dates = live_photo_dates or {}
-    name_only = filename.rsplit('.', 1)[0]
-    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ""
-    lookup_key = (os.path.dirname(file_path), name_only)
+    name_only, raw_ext = split_filename_ext(filename)
+    ext = raw_ext.lstrip(".").lower()
+    raw_key = (os.path.dirname(file_path), name_only)
+    norm_key = _live_photo_norm_key(file_path)
 
     year = month = None
 
@@ -46,13 +107,16 @@ def compute_relative_destination(categorizer, dates, file_path: str,
     # filesystem mtime. So the table was never read, and a Live Photo whose
     # .mov had a reset mtime was filed years away from its own .heic.
     # The still's capture date is the authoritative one for the pair.
-    if ext in LIVE_PHOTO_VIDEO_EXTS and lookup_key in live_photo_dates:
-        year, month = live_photo_dates[lookup_key]
+    if ext in LIVE_PHOTO_VIDEO_EXTS or ext in LIVE_PHOTO_STILL_EXTS:
+        if norm_key in live_photo_dates:
+            year, month = live_photo_dates[norm_key]
+        elif raw_key in live_photo_dates:
+            year, month = live_photo_dates[raw_key]
 
     if not (year and month):
         year, month = dates.extract_date(file_path)
 
-    if categorizer.is_screenshot(filename):
+    if categorizer.is_screenshot(filename) and not dates.has_camera_exif(file_path):
         if year and month:
             return os.path.join("Media", "Screenshots", year, month, filename)
         return os.path.join("Media", "Screenshots", "Unsorted", filename)
@@ -63,21 +127,36 @@ def compute_relative_destination(categorizer, dates, file_path: str,
 
 
 class OrganizerAPI:
-    def __init__(self, config_path: str, log_cb: Callable[[str], None], progress_cb: Callable[[int, int, str], None]):
+    def __init__(
+        self,
+        config_path: str,
+        log_cb: Optional[Callable[[str], None]] = None,
+        progress_cb: Optional[Callable[..., None]] = None,
+    ):
         self.config_path = config_path
-        self.log_cb = log_cb
-        self.progress_cb = progress_cb
+        self.log_cb = log_cb or (lambda msg: None)
+        self.progress_cb = progress_cb or (lambda *args: None)
         self.cancelled = False
 
     def cancel(self):
         self.cancelled = True
-        
+
+    def _emit_progress(self, current: int, total: int, message: str, eta: str = ""):
+        """Emits progress while remaining compatible with both 3-arg and 4-arg callbacks."""
+        if not self.progress_cb:
+            return
+        if eta:
+            try:
+                self.progress_cb(current, total, message, eta)
+                return
+            except TypeError:
+                pass
+        self.progress_cb(current, total, message)
+
     @staticmethod
     def _split_sources(source_abs) -> List[str]:
         """Normalises the source argument (list, or comma-separated string)."""
-        if isinstance(source_abs, list):
-            return [str(p).strip() for p in source_abs if str(p).strip()]
-        return [p.strip() for p in str(source_abs).split(',') if p.strip()]
+        return split_source_paths(source_abs)
 
     @staticmethod
     def validate_paths(source_abs, dest_abs: str) -> Optional[str]:
@@ -89,25 +168,50 @@ class OrganizerAPI:
         around with symlinks or trailing separators. The GUI had no check at
         all, so a destination nested inside the source was accepted.
         """
-        dest_real = os.path.realpath(dest_abs)
-        for src in OrganizerAPI._split_sources(source_abs):
-            src_real = os.path.realpath(src)
-            if src_real == dest_real:
+        if not dest_abs or not str(dest_abs).strip():
+            return "Safety Error: Destination path cannot be empty."
+        sources = OrganizerAPI._split_sources(source_abs)
+        if not sources:
+            return "Safety Error: Source path cannot be empty."
+
+        dest_expanded = os.path.expanduser(str(dest_abs).strip())
+        dest_real = os.path.realpath(dest_expanded)
+        dest_norm = unicodedata.normalize("NFD", dest_real).lower()
+
+        if os.path.exists(dest_real) and not os.path.isdir(dest_real):
+            return f"Safety Error: Destination '{dest_real}' is a file, not a folder."
+
+        for src in sources:
+            src_expanded = os.path.expanduser(str(src).strip())
+            src_real = os.path.realpath(src_expanded)
+            src_norm = unicodedata.normalize("NFD", src_real).lower()
+
+            if src_real == dest_real or src_norm == dest_norm:
                 return "Safety Error: Source and Destination are the same folder."
             try:
-                if os.path.commonpath([dest_real, src_real]) == src_real:
+                if (
+                    os.path.commonpath([dest_real, src_real]) == src_real
+                    or os.path.commonpath([dest_norm, src_norm]) == src_norm
+                ):
                     return (
                         f"Safety Error: Destination '{dest_real}' is inside source "
                         f"'{src_real}'. Choose a destination outside the source folder."
                     )
-                if os.path.commonpath([dest_real, src_real]) == dest_real:
+                if (
+                    os.path.commonpath([dest_real, src_real]) == dest_real
+                    or os.path.commonpath([dest_norm, src_norm]) == dest_norm
+                ):
                     return (
                         f"Safety Error: Source '{src_real}' is inside destination "
                         f"'{dest_real}'. Choose a destination outside the source folder."
                     )
             except ValueError:
                 # Different volumes - no containment possible.
-                continue
+                pass
+
+            if os.path.exists(src_real) and not os.path.isdir(src_real):
+                return f"Safety Error: Source '{src_real}' is a file, not a folder."
+
         return None
 
     def run(self, source_abs: str, dest_abs: str, is_preview: bool = False, dest_mode: str = "new", excluded_projects: list = None):
@@ -117,7 +221,7 @@ class OrganizerAPI:
         self.log_cb(f"Mode: {mode_str} | Destination Strategy: {folder_type}")
         self.log_cb(f"Source: {source_abs}")
         self.log_cb(f"Destination: {dest_abs}")
-        
+
         if not os.path.exists(self.config_path):
             self.log_cb("Error: config.json is missing!")
             return False
@@ -127,23 +231,36 @@ class OrganizerAPI:
             self.log_cb(f"❌ {path_error}")
             return False
 
+        dest_abs = os.path.expanduser(str(dest_abs).strip())
+        sources_list = self._split_sources(source_abs)
+        for src in sources_list:
+            if not os.path.exists(src):
+                self.log_cb(f"❌ Error: Source folder '{src}' does not exist.")
+                return False
+            if not os.path.isdir(src):
+                self.log_cb(f"❌ Error: Source path '{src}' is not a directory.")
+                return False
+
         categorizer = Categorizer(self.config_path)
         # Extract archives into a staging area on the destination volume, never
         # onto the source drive.
         staging_root = os.path.join(dest_abs, ".organizer_staging")
         scanner = Scanner(categorizer, staging_root=staging_root)
-        
+
         self.log_cb(f"Scanning {source_abs} for files...")
         excluded_set = set(excluded_projects or [])
-        scanner.scan_directory(source_abs, excluded_projects=excluded_set, progress_cb=self.progress_cb, cancel_check=lambda: self.cancelled, is_preview=is_preview)
+        scanner.scan_directory(
+            sources_list,
+            excluded_projects=excluded_set,
+            progress_cb=self._emit_progress,
+            cancel_check=lambda: self.cancelled,
+            is_preview=is_preview,
+        )
 
-        
         if self.cancelled:
             self.log_cb("Operation cancelled by user. Progress saved.")
             return False
 
-
-        
         total_bytes = 0
         unmeasured_files = 0
         category_counts: Dict[str, int] = {}
@@ -165,12 +282,33 @@ class OrganizerAPI:
             if len(category_samples[cat]) < 25:
                 category_samples[cat].append(fp)
 
+        # Include intact code project sizes in total_bytes so free-space pre-flight checks are accurate
+        project_bytes = 0
+        ignore_fn = shutil.ignore_patterns(*PROJECT_IGNORE_PATTERNS)
+        for proj_path in scanner.projects_found:
+            for r, dirs, fs in os.walk(proj_path):
+                ignored = ignore_fn(r, dirs + fs)
+                dirs[:] = [d for d in dirs if d not in ignored]
+                for f in fs:
+                    if f in ignored:
+                        continue
+                    try:
+                        project_bytes += os.path.getsize(os.path.join(r, f))
+                    except OSError:
+                        pass
+        total_bytes += project_bytes
+
         estimated_archive_bytes = 0
         if unmeasured_files and is_preview:
             # Read the uncompressed sizes straight out of the zip directories.
             # Cheap: the central directory is metadata, not file content.
             import zipfile
+            seen_zips = set()
             for zip_path in scanner.processed_zips:
+                zp_real = os.path.realpath(zip_path) if os.path.exists(zip_path) else zip_path
+                if zp_real in seen_zips:
+                    continue
+                seen_zips.add(zp_real)
                 try:
                     with zipfile.ZipFile(zip_path, 'r') as zf:
                         estimated_archive_bytes += sum(
@@ -184,13 +322,13 @@ class OrganizerAPI:
                         pass
             total_bytes += estimated_archive_bytes
 
-        from .utils import format_size
+        from .utils import format_size, get_default_history_file, save_run_to_history
         size_str = format_size(total_bytes)
         self.log_cb(f"Found {len(scanner.files_to_process)} files ({size_str}) to organize.")
         if estimated_archive_bytes:
             self.log_cb(
                 f"  (includes ~{format_size(estimated_archive_bytes)} estimated from "
-                f"{len(scanner.processed_zips)} archive(s) that will be unzipped)"
+                f"{len(scanner.gdrive_zip_names)} archive(s) that will be unzipped)"
             )
         self.log_cb(f"Found {len(scanner.projects_found)} intact code projects.")
         if scanner.ignored_garbage_count > 0:
@@ -208,8 +346,13 @@ class OrganizerAPI:
 
         free_space_str = "Unknown"
         free_bytes = None
+        dest_parent = os.path.abspath(dest_abs)
+        while dest_parent and not os.path.exists(dest_parent):
+            parent = os.path.dirname(dest_parent)
+            if parent == dest_parent:
+                break
+            dest_parent = parent
         try:
-            dest_parent = dest_abs if os.path.exists(dest_abs) else os.path.dirname(dest_abs)
             free_bytes = shutil.disk_usage(dest_parent).free
             free_space_str = format_size(free_bytes)
             self.log_cb(f"Destination Drive Free Space: {free_space_str}")
@@ -219,13 +362,13 @@ class OrganizerAPI:
         # Hard block: refuse a fresh run that cannot possibly fit.
         # On a resume the destination may already hold most of the data, so warn only.
         if free_bytes is not None and total_bytes > free_bytes and not is_preview:
-            # Check if all sources and destination are on the same volume (for APFS zero-copy)
+            # Check if all sources and destination are on the same APFS volume (for zero-copy cloning)
             same_volume = False
             try:
                 dest_dev = os.stat(dest_parent).st_dev
-                sources = [src for src in OrganizerAPI._split_sources(source_abs) if os.path.exists(src)]
-                if sources:
-                    same_volume = all(os.stat(src).st_dev == dest_dev for src in sources)
+                existing_sources = [src for src in sources_list if os.path.exists(src)]
+                if existing_sources:
+                    same_volume = all(os.stat(src).st_dev == dest_dev for src in existing_sources)
             except OSError:
                 pass
 
@@ -234,15 +377,16 @@ class OrganizerAPI:
                 f"Not enough free space on destination: need {size_str}, "
                 f"only {free_space_str} available."
             )
-            
+
             from .file_ops import _HAS_NATIVE_COPYFILE
-            
+
             if is_resume:
                 self.log_cb(f"⚠️  {msg} Continuing because this looks like a resumed transfer.")
-            elif same_volume and _HAS_NATIVE_COPYFILE:
-                self.log_cb(f"⚠️  {msg} Continuing because source and destination are on the same Mac drive (APFS cloning will use ~0 extra bytes).")
+            elif same_volume and _HAS_NATIVE_COPYFILE and _is_apfs_volume(dest_parent):
+                self.log_cb(f"⚠️  {msg} Continuing because source and destination are on the same Mac APFS drive (cloning will use ~0 extra bytes).")
             else:
                 self.log_cb(f"❌ Error: {msg}")
+                scanner.cleanup_staging()
                 return False
 
         project_details = [{"name": os.path.basename(p), "path": p} for p in scanner.projects_found]
@@ -264,22 +408,18 @@ class OrganizerAPI:
             "category_samples": category_samples
         }
 
-
-
-        
         if len(scanner.files_to_process) == 0 and len(scanner.projects_found) == 0:
             self.log_cb("Warning: No files found to move!")
             return True
 
         if is_preview:
-            self.progress_cb(100, 100, "Preview Complete")
+            self._emit_progress(100, 100, "Preview Complete")
             self.log_cb("Preview Complete! No files were moved or altered.")
 
             # Save preview history
             try:
                 from datetime import datetime
-                from .utils import save_run_to_history
-                history_file = os.path.join(os.path.dirname(self.config_path), "run_history.json")
+                history_file = get_default_history_file(os.path.dirname(self.config_path))
                 timestamp_str = datetime.now().strftime("%B %d, %Y at %I:%M %p")
                 run_record = {
                     "id": f"run_{int(time.time())}",
@@ -298,7 +438,6 @@ class OrganizerAPI:
                 pass
 
             return True
-
 
         # Execution
         try:
@@ -326,15 +465,8 @@ class OrganizerAPI:
         engine.start_caffeinate()
 
         try:
-            # Pre-pass: Index HEIC dates for Live Photos
-            live_photo_dates: Dict[Tuple[str, str], Tuple[str, str]] = {}
-            for fp in scanner.files_to_process:
-                if fp.rsplit('.', 1)[-1].lower() == 'heic':
-                    y, m = dates.extract_date(fp)
-                    if y and m:
-                        dir_name, fn = os.path.split(fp)
-                        name_only = fn.rsplit('.', 1)[0]
-                        live_photo_dates[(dir_name, name_only)] = (y, m)
+            # Pre-pass: Index capture dates for Live Photo pairs
+            live_photo_dates = build_live_photo_dates(scanner.files_to_process, dates)
 
             # Total items count for continuous progress calculation
             total_projects = len(scanner.projects_found)
@@ -349,12 +481,16 @@ class OrganizerAPI:
                 proj_name = os.path.basename(proj)
                 dest_proj = os.path.join(dest_abs, "Code", proj_name)
 
+                if engine.is_project_dissolved(proj):
+                    self._emit_progress(i + 1, total_items, f"Skipped (Previously dissolved): {proj_name}")
+                    continue
+
                 # Projects are copied wholesale, so they need their own
                 # "already done" check. Without it, re-running the same job
                 # clones every repository again as project_1, project_2, ...
                 previous = engine.get_project_copy(proj)
                 if previous:
-                    self.progress_cb(i + 1, total_items, f"Skipped (Already copied): {proj_name}")
+                    self._emit_progress(i + 1, total_items, f"Skipped (Already copied): {proj_name}")
                     continue
 
                 # Collision handling for duplicate project folder names.
@@ -363,7 +499,7 @@ class OrganizerAPI:
                 if os.path.exists(dest_proj):
                     if project_already_copied(proj, dest_proj):
                         engine.record_project(proj, dest_proj)
-                        self.progress_cb(i + 1, total_items, f"Skipped (Already copied): {proj_name}")
+                        self._emit_progress(i + 1, total_items, f"Skipped (Already copied): {proj_name}")
                         continue
                     c = 1
                     while os.path.exists(os.path.join(dest_abs, "Code", f"{proj_name}_{c}")):
@@ -374,22 +510,19 @@ class OrganizerAPI:
                     dest_proj = os.path.join(dest_abs, "Code", f"{proj_name}_{c}")
                     if project_already_copied(proj, dest_proj):
                         engine.record_project(proj, dest_proj)
-                        self.progress_cb(i + 1, total_items, f"Skipped (Already copied): {proj_name}")
+                        self._emit_progress(i + 1, total_items, f"Skipped (Already copied): {proj_name}")
                         continue
 
-                self.progress_cb(i + 1, total_items, f"Copying project: {os.path.basename(dest_proj)}")
+                self._emit_progress(i + 1, total_items, f"Copying project: {os.path.basename(dest_proj)}")
                 ok, proj_err = copy_project_intact(proj, dest_proj)
                 if ok:
                     engine.record_project(proj, dest_proj)
                 else:
                     self.log_cb(f"Warning: Issue copying code project {proj_name}: {proj_err}")
 
-
-
-                    
             # 2. Files - Multi-Threaded Parallel Execution (4 Workers)
-            import time
             completed_counter = [0]
+            copied_this_run = [0]
             counter_lock = threading.Lock()
             start_time = time.time()
 
@@ -403,21 +536,21 @@ class OrganizerAPI:
                         completed_counter[0] += 1
                         idx = total_projects + completed_counter[0]
                         if completed_counter[0] % 10 == 0 or completed_counter[0] == total_files:
-                            self.progress_cb(idx, total_items, f"Skipped (Already copied): {filename}")
+                            self._emit_progress(idx, total_items, f"Skipped (Already copied): {filename}")
                     return
 
                 rel_dest = compute_relative_destination(
                     categorizer, dates, file_path, live_photo_dates
                 )
-                    
+
                 target_base = os.path.join(dest_abs, rel_dest)
-                
+
                 try:
                     size = os.path.getsize(file_path)
                     mtime = os.path.getmtime(file_path)
                 except OSError:
                     return
-                    
+
                 final_dest = None
                 try:
                     final_dest, part_hash, twin = engine.resolve_destination(target_base, filename, size, file_path)
@@ -452,14 +585,14 @@ class OrganizerAPI:
                     if final_dest:
                         engine.release_reservation(final_dest)
 
-
                 with counter_lock:
                     completed_counter[0] += 1
+                    copied_this_run[0] += 1
                     idx = total_projects + completed_counter[0]
                     elapsed = time.time() - start_time
                     eta_str = ""
-                    if elapsed > 0.5 and completed_counter[0] > 0:
-                        rate = completed_counter[0] / elapsed
+                    if elapsed > 0.5 and copied_this_run[0] > 0:
+                        rate = copied_this_run[0] / elapsed
                         rem_files = total_files - completed_counter[0]
                         rem_seconds = int(rem_files / rate)
                         if rem_seconds >= 3600:
@@ -474,11 +607,11 @@ class OrganizerAPI:
                             eta_str = f"⏳ ~{rem_seconds}s remaining"
 
                     if completed_counter[0] % 5 == 0 or completed_counter[0] == total_files:
-                        self.progress_cb(idx, total_items, f"Organizing: {filename}", eta_str)
+                        self._emit_progress(idx, total_items, f"Organizing: {filename}", eta_str)
 
             max_workers = 4
             self.log_cb(f"Using {max_workers} safe parallel worker threads for fast transfer.")
-            
+
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 list(executor.map(process_single_file, scanner.files_to_process))
 
@@ -491,14 +624,13 @@ class OrganizerAPI:
 
             scanner.cleanup_staging()
 
-            self.progress_cb(total_items, total_items, "Complete")
+            self._emit_progress(total_items, total_items, "Complete")
             self.log_cb("All done! 100% of files organized safely.")
 
             # Record history
             try:
                 from datetime import datetime
-                from .utils import save_run_to_history
-                history_file = os.path.join(os.path.dirname(self.config_path), "run_history.json")
+                history_file = get_default_history_file(os.path.dirname(self.config_path))
                 timestamp_str = datetime.now().strftime("%B %d, %Y at %I:%M %p")
                 run_record = {
                     "id": f"run_{int(time.time())}",
@@ -538,18 +670,21 @@ class OrganizerAPI:
         finally:
             engine.close()
 
-
     def list_code_projects(self, dest_abs: str):
         """Returns a list of project folders inside dest_abs/Code/."""
         code_dir = os.path.join(dest_abs, "Code")
         if not os.path.exists(code_dir):
             return []
         projects = []
-        for item in os.listdir(code_dir):
+        for item in sorted(os.listdir(code_dir)):
             full_path = os.path.join(code_dir, item)
-            if os.path.isdir(full_path) and item != "Snippets":
-                # count files
-                file_count = sum(len(files) for _, _, files in os.walk(full_path))
+            if os.path.isdir(full_path) and item.lower() != "snippets":
+                file_count = 0
+                for _r, dirs, files in os.walk(full_path):
+                    dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
+                    for f in files:
+                        if f not in GARBAGE_FILES and not f.startswith(("._", "~$")):
+                            file_count += 1
                 projects.append({"name": item, "path": full_path, "file_count": file_count})
         return projects
 
@@ -565,50 +700,68 @@ class OrganizerAPI:
         if target == code_root or os.path.commonpath([code_root, target]) != code_root:
             return False, "Refused: project folder must be inside the destination's Code/ folder."
 
+        if os.path.basename(target).lower() == "snippets":
+            return False, "Refused: Code/Snippets is a category folder, not a code project."
+
         if not os.path.isdir(project_folder_path):
             return False, "Folder does not exist"
 
         categorizer = Categorizer(self.config_path)
+        scanner_helper = Scanner(categorizer)
         dates = DateExtractor(categorizer)
         engine = FileEngine(dest_abs)
 
         try:
             files_to_move = []
             for root, dirs, files in os.walk(project_folder_path):
+                # Do not dissolve .git or build/system caches into user categories!
+                dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
                 for f in files:
+                    if scanner_helper.is_garbage(f):
+                        continue
                     files_to_move.append(os.path.join(root, f))
+
+            live_photo_dates = build_live_photo_dates(files_to_move, dates)
 
             for file_path in files_to_move:
                 filename = os.path.basename(file_path)
-                rel_dest = compute_relative_destination(categorizer, dates, file_path)
-                    
+                rel_dest = compute_relative_destination(categorizer, dates, file_path, live_photo_dates)
+
                 target_base = os.path.join(dest_abs, rel_dest)
-                size = os.path.getsize(file_path)
-                mtime = os.path.getmtime(file_path)
+                try:
+                    size = os.path.getsize(file_path)
+                    mtime = os.path.getmtime(file_path)
+                except OSError:
+                    continue
 
                 final_dest = None
                 try:
                     final_dest, part_hash, _twin = engine.resolve_destination(target_base, filename, size, file_path)
                     if final_dest:
+                        os.makedirs(os.path.dirname(final_dest), exist_ok=True)
                         try:
                             shutil.move(file_path, final_dest)
                         except OSError:
                             safe_copy(file_path, final_dest)
-                            try:
-                                os.remove(file_path)
-                            except OSError:
-                                pass
+                            _force_remove(file_path)
+                        if "Unsorted" in rel_dest.split(os.sep)[:-1]:
+                            engine.set_finder_tag(final_dest, "5", "To Review")
                         engine.record_copy(file_path, final_dest, size, mtime, part_hash)
+                    else:
+                        # Duplicate of an existing file in destination: remove the copy inside the project
+                        # so it does not block rmtree of the dissolved project folder.
+                        _force_remove(file_path)
                 finally:
                     if final_dest:
                         engine.release_reservation(final_dest)
 
-            # Only remove the folder if nothing is left in it. An unconditional
-            # rmtree would destroy any file that failed to move.
+            # Only remove the folder if no user files are left in it. An unconditional
+            # rmtree would destroy any user file that failed to move.
             leftovers = []
-            for root, _dirs, files in os.walk(project_folder_path):
+            for root, dirs, files in os.walk(project_folder_path):
+                dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
                 for f in files:
-                    if f != ".DS_Store":
+                    if not scanner_helper.is_garbage(f):
                         leftovers.append(os.path.join(root, f))
 
             if leftovers:
@@ -617,7 +770,19 @@ class OrganizerAPI:
                     f"left in place at {project_folder_path}. Nothing was deleted."
                 )
 
-            shutil.rmtree(project_folder_path, ignore_errors=True)
+            def _handle_remove_readonly(func, path, _exc_info):
+                _clear_immutable(path)
+                try:
+                    os.chmod(path, 0o700)
+                except OSError:
+                    pass
+                try:
+                    func(path)
+                except OSError:
+                    pass
+
+            shutil.rmtree(project_folder_path, onerror=_handle_remove_readonly)
+            engine.mark_project_dissolved(project_folder_path)
             return True, "Project dissolved and files re-sorted successfully!"
         except Exception as e:
             return False, str(e)
@@ -629,8 +794,8 @@ class OrganizerAPI:
         db_path = os.path.join(dest_abs, ".organizer_checkpoint.db")
         if not os.path.exists(db_path):
             return []
-        import sqlite3
-        conn = sqlite3.connect(db_path)
+        staging_prefix = os.path.realpath(os.path.join(dest_abs, ".organizer_staging")) + os.sep
+        conn = sqlite3.connect(db_path, timeout=30.0)
         try:
             cursor = conn.execute(
                 "SELECT source_path, size, COALESCE(duplicate_of, '') FROM copies "
@@ -646,7 +811,18 @@ class OrganizerAPI:
             rows = [(r[0], r[1], "") for r in cursor.fetchall()]
         finally:
             conn.close()
-        return [{"source_path": r[0], "size": r[1], "duplicate_of": r[2]} for r in rows]
+
+        records = []
+        for src_p, sz, dup_of in rows:
+            if not src_p or not os.path.exists(src_p):
+                continue
+            try:
+                if os.path.realpath(src_p).startswith(staging_prefix):
+                    continue
+            except OSError:
+                pass
+            records.append({"source_path": src_p, "size": sz, "duplicate_of": dup_of})
+        return records
 
     def trash_duplicates(self, source_paths: list, dest_abs: str = ""):
         """
@@ -662,41 +838,65 @@ class OrganizerAPI:
 
         Returns (trashed_count, refused_list).
         """
-        valid_paths = [p for p in source_paths if os.path.exists(p)]
+        valid_paths = [p for p in source_paths if p and os.path.exists(p)]
         if not valid_paths:
             return 0, []
 
+        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db") if dest_abs else ""
+        if not dest_abs or not os.path.exists(db_path):
+            refused = [
+                f"{os.path.basename(p)}: no verified destination checkpoint database provided - left in place."
+                for p in valid_paths
+            ]
+            return 0, refused
+
         # Look up the surviving twin recorded for each duplicate.
         twins: Dict[str, str] = {}
-        if dest_abs:
-            for rec in self.get_duplicate_records(dest_abs):
-                twins[rec["source_path"]] = rec.get("duplicate_of") or ""
+        for rec in self.get_duplicate_records(dest_abs):
+            sp = rec["source_path"]
+            dup_of = rec.get("duplicate_of") or ""
+            twins[sp] = dup_of
+            try:
+                twins[os.path.realpath(sp)] = dup_of
+            except OSError:
+                pass
 
         trashed_count = 0
+        trashed_pairs: List[Tuple[str, str]] = []
         refused = []
         for file_path in valid_paths:
-            twin = twins.get(file_path, "")
+            twin = twins.get(file_path) or twins.get(os.path.realpath(file_path), "")
 
-            if dest_abs:
-                if not twin:
+            if not twin:
+                refused.append(
+                    f"{os.path.basename(file_path)}: no record of which destination "
+                    f"copy this matched (organized by an older version) - left in place."
+                )
+                continue
+            if not os.path.exists(twin):
+                refused.append(
+                    f"{os.path.basename(file_path)}: its copy at the destination is "
+                    f"missing - left in place so you still have the original."
+                )
+                continue
+            try:
+                if os.path.samefile(file_path, twin):
                     refused.append(
-                        f"{os.path.basename(file_path)}: no record of which destination "
-                        f"copy this matched (organized by an older version) - left in place."
+                        f"{os.path.basename(file_path)}: source and destination point to the "
+                        f"same underlying file - left in place."
                     )
                     continue
-                if not os.path.exists(twin):
-                    refused.append(
-                        f"{os.path.basename(file_path)}: its copy at the destination is "
-                        f"missing - left in place so you still have the original."
-                    )
-                    continue
-                if not files_are_identical(file_path, twin):
-                    refused.append(
-                        f"{os.path.basename(file_path)}: no longer byte-identical to the "
-                        f"destination copy - left in place."
-                    )
-                    continue
+            except OSError:
+                pass
+            if not files_are_identical(file_path, twin):
+                refused.append(
+                    f"{os.path.basename(file_path)}: no longer byte-identical to the "
+                    f"destination copy - left in place."
+                )
+                continue
 
+            moved_ok = False
+            recorded_trash_path = ""
             try:
                 parent_dir = os.path.dirname(file_path)
                 trash_dir = os.path.join(parent_dir, ".Duplicates_Trash")
@@ -707,29 +907,181 @@ class OrganizerAPI:
 
                 # Handle filename collisions in trash folder
                 counter = 1
-                name, ext = os.path.splitext(filename)
+                name, ext = split_filename_ext(filename)
+                ext_dot = ext if ext.startswith(".") else (f".{ext}" if ext else "")
                 while os.path.exists(target_path):
-                    target_path = os.path.join(trash_dir, f"{name}_{counter}{ext}")
+                    target_path = os.path.join(trash_dir, f"{name}_{counter}{ext_dot}")
                     counter += 1
 
                 shutil.move(file_path, target_path)
                 trashed_count += 1
+                moved_ok = True
+                recorded_trash_path = target_path
             except Exception:
-                # Fallback to AppleScript if direct filesystem move fails
+                # Fallback to AppleScript if direct filesystem move fails; pass path via argv
                 try:
-                    escaped_path = file_path.replace('\\', '\\\\').replace('"', '\\"')
-                    script = f'tell application "Finder" to delete POSIX file "{escaped_path}"'
-                    res = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+                    script = (
+                        "on run argv\n"
+                        "  tell application \"Finder\" to delete (POSIX file (item 1 of argv))\n"
+                        "end run"
+                    )
+                    res = subprocess.run(
+                        ["osascript", "-e", script, file_path],
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                    )
                     if res.returncode == 0:
                         trashed_count += 1
+                        moved_ok = True
                     else:
                         refused.append(f"{os.path.basename(file_path)}: could not be moved.")
                 except Exception:
                     refused.append(f"{os.path.basename(file_path)}: could not be moved.")
 
+            if moved_ok:
+                trashed_pairs.append((recorded_trash_path, file_path))
+
+        if trashed_pairs and os.path.exists(db_path):
+            try:
+                conn = sqlite3.connect(db_path, timeout=30.0)
+                try:
+                    cols = [r[1] for r in conn.execute("PRAGMA table_info(copies)").fetchall()]
+                    if "trashed_path" not in cols:
+                        conn.execute("ALTER TABLE copies ADD COLUMN trashed_path TEXT DEFAULT ''")
+                    conn.executemany(
+                        "UPDATE copies SET status = 'trashed', trashed_path = ? WHERE source_path = ?",
+                        trashed_pairs,
+                    )
+                except sqlite3.OperationalError:
+                    conn.executemany(
+                        "UPDATE copies SET status = 'trashed' WHERE source_path = ?",
+                        [(src_p,) for _tp, src_p in trashed_pairs],
+                    )
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+
         return trashed_count, refused
 
+    def get_trashed_duplicates(self, dest_abs: str):
+        """Returns list of duplicate source files currently isolated in .Duplicates_Trash."""
+        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db") if dest_abs else ""
+        if not dest_abs or not os.path.exists(db_path):
+            return []
+        conn = sqlite3.connect(db_path, timeout=30.0)
+        try:
+            cursor = conn.execute(
+                "SELECT source_path, size, COALESCE(duplicate_of, ''), COALESCE(trashed_path, '') FROM copies "
+                "WHERE status = 'trashed'"
+            )
+            rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+            try:
+                cursor = conn.execute(
+                    "SELECT source_path, size, COALESCE(duplicate_of, '') FROM copies WHERE status = 'trashed'"
+                )
+                rows = [(r[0], r[1], r[2], "") for r in cursor.fetchall()]
+            except sqlite3.OperationalError:
+                rows = []
+        finally:
+            conn.close()
 
+        records = []
+        for src_p, sz, dup_of, tr_p in rows:
+            if not src_p:
+                continue
+            cand_trash = tr_p or os.path.join(os.path.dirname(src_p), ".Duplicates_Trash", os.path.basename(src_p))
+            if os.path.exists(cand_trash):
+                records.append({
+                    "source_path": src_p,
+                    "trashed_path": cand_trash,
+                    "size": sz,
+                    "duplicate_of": dup_of,
+                })
+        return records
+
+    def restore_duplicates(self, dest_abs: str, source_paths: Optional[list] = None):
+        """
+        Restores duplicate files from .Duplicates_Trash back to their original source locations.
+        Returns (restored_count, refused_list).
+        """
+        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db") if dest_abs else ""
+        if not dest_abs or not os.path.exists(db_path):
+            return 0, ["No verified destination checkpoint database found."]
+
+        trashed_records = self.get_trashed_duplicates(dest_abs)
+        if not trashed_records:
+            return 0, []
+
+        if source_paths:
+            requested = set(source_paths) | {os.path.realpath(p) for p in source_paths if p}
+            trashed_records = [
+                r for r in trashed_records
+                if r["source_path"] in requested or os.path.realpath(r["source_path"]) in requested
+            ]
+
+        restored_count = 0
+        restored_sources: List[str] = []
+        refused: List[str] = []
+
+        for rec in trashed_records:
+            src_p = rec["source_path"]
+            tr_p = rec["trashed_path"]
+            if not os.path.exists(tr_p):
+                refused.append(f"{os.path.basename(src_p)}: trashed file no longer exists in .Duplicates_Trash.")
+                continue
+
+            if os.path.exists(src_p):
+                if files_are_identical(tr_p, src_p):
+                    try:
+                        os.remove(tr_p)
+                        restored_count += 1
+                        restored_sources.append(src_p)
+                    except OSError as e:
+                        refused.append(f"{os.path.basename(src_p)}: {e}")
+                else:
+                    refused.append(
+                        f"{os.path.basename(src_p)}: a different file now exists at the original path - left in .Duplicates_Trash."
+                    )
+                    continue
+            else:
+                try:
+                    os.makedirs(os.path.dirname(src_p), exist_ok=True)
+                    shutil.move(tr_p, src_p)
+                    restored_count += 1
+                    restored_sources.append(src_p)
+                except Exception as e:
+                    refused.append(f"{os.path.basename(src_p)}: could not be restored ({e}).")
+                    continue
+
+            trash_dir = os.path.dirname(tr_p)
+            try:
+                if os.path.basename(trash_dir) == ".Duplicates_Trash" and os.path.isdir(trash_dir) and not os.listdir(trash_dir):
+                    os.rmdir(trash_dir)
+            except OSError:
+                pass
+
+        if restored_sources and os.path.exists(db_path):
+            try:
+                conn = sqlite3.connect(db_path, timeout=30.0)
+                try:
+                    conn.executemany(
+                        "UPDATE copies SET status = 'completed', dest_path = 'DUPLICATE_SKIPPED', trashed_path = '' WHERE source_path = ?",
+                        [(s,) for s in restored_sources],
+                    )
+                except sqlite3.OperationalError:
+                    conn.executemany(
+                        "UPDATE copies SET status = 'completed', dest_path = 'DUPLICATE_SKIPPED' WHERE source_path = ?",
+                        [(s,) for s in restored_sources],
+                    )
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+
+        return restored_count, refused
 
     def verify_transfer(self, dest_abs: str) -> dict:
         """
@@ -745,8 +1097,14 @@ class OrganizerAPI:
 
         try:
             conn = sqlite3.connect(db_path, timeout=30.0)
-            cursor = conn.execute("SELECT source_path, dest_path, status, size, part_hash FROM copies")
-            rows = cursor.fetchall()
+            try:
+                cursor = conn.execute(
+                    "SELECT source_path, dest_path, status, size, part_hash, COALESCE(duplicate_of, '') FROM copies"
+                )
+                rows = cursor.fetchall()
+            except sqlite3.OperationalError:
+                cursor = conn.execute("SELECT source_path, dest_path, status, size, part_hash FROM copies")
+                rows = [(r[0], r[1], r[2], r[3], r[4], "") for r in cursor.fetchall()]
             conn.close()
         except Exception as db_err:
             return {"success": False, "error": f"Database error: {str(db_err)}"}
@@ -760,14 +1118,18 @@ class OrganizerAPI:
         skipped_dup_count = 0
         missing_list = []
         mismatched_list = []
-        hash_check_limit = 10000 # Check SHA-256 hashes for up to 10,000 files for comprehensive verification
+        hash_check_limit = 10000  # Check SHA-256 hashes for up to 10,000 files for comprehensive verification
         hashes_checked = 0
         # Built lazily, at most once, only if some file is not where we expect.
         dest_index: Optional[Dict[str, List[str]]] = None
 
-        for source_path, dest_path, status, size, part_hash in rows:
+        for source_path, dest_path, status, size, part_hash, duplicate_of in rows:
             if dest_path == "DUPLICATE_SKIPPED":
-                skipped_dup_count += 1
+                if duplicate_of and not os.path.exists(duplicate_of):
+                    missing_count += 1
+                    missing_list.append(f"{os.path.basename(source_path)} (Surviving duplicate copy missing)")
+                else:
+                    skipped_dup_count += 1
                 continue
 
             if status and status.startswith("failed"):
@@ -784,8 +1146,11 @@ class OrganizerAPI:
             if not os.path.exists(target_check_path):
                 if dest_index is None:
                     dest_index = {}
-                    for root, _dirs, files in os.walk(dest_abs):
+                    for root, dirs, files in os.walk(dest_abs):
+                        dirs[:] = [d for d in dirs if d not in SKIP_ORGANIZER_DIRS and not d.startswith(".unzipped_")]
                         for f in files:
+                            if f.endswith(".tmp") or f in GARBAGE_FILES:
+                                continue
                             dest_index.setdefault(f, []).append(os.path.join(root, f))
 
                 found = False
@@ -871,8 +1236,14 @@ class OrganizerAPI:
 
         try:
             conn = sqlite3.connect(db_path, timeout=30.0)
-            cursor = conn.execute("SELECT source_path, dest_path, size, part_hash, status FROM copies")
-            rows = cursor.fetchall()
+            try:
+                cursor = conn.execute(
+                    "SELECT source_path, dest_path, size, part_hash, status, COALESCE(duplicate_of, '') FROM copies"
+                )
+                rows = cursor.fetchall()
+            except sqlite3.OperationalError:
+                cursor = conn.execute("SELECT source_path, dest_path, size, part_hash, status FROM copies")
+                rows = [(r[0], r[1], r[2], r[3], r[4], "") for r in cursor.fetchall()]
             conn.close()
         except Exception as db_err:
             return {"success": False, "error": f"Database error: {str(db_err)}"}
@@ -892,7 +1263,7 @@ class OrganizerAPI:
         # owned by a row that actually succeeded.
         path_claims: Dict[str, int] = {}
         completed_paths = set()
-        for source_path, dest_path, size, part_hash, status in rows:
+        for source_path, dest_path, size, part_hash, status, _dup_of in rows:
             if not dest_path or dest_path == "DUPLICATE_SKIPPED":
                 continue
             path_claims[dest_path] = path_claims.get(dest_path, 0) + 1
@@ -901,10 +1272,11 @@ class OrganizerAPI:
 
         engine = FileEngine(dest_abs)
         purged_sources = []
+        bad_dest_paths = set()
         deleted_count = 0
 
         try:
-            for source_path, dest_path, size, part_hash, status in rows:
+            for source_path, dest_path, size, part_hash, status, duplicate_of in rows:
                 if dest_path == "DUPLICATE_SKIPPED":
                     continue
 
@@ -936,6 +1308,8 @@ class OrganizerAPI:
                     continue
 
                 purged_sources.append(source_path)
+                if dest_path:
+                    bad_dest_paths.add(dest_path)
 
                 # Only delete a file this row unambiguously owns.
                 if not os.path.exists(dest_path):
@@ -947,11 +1321,18 @@ class OrganizerAPI:
                 if failed_row and dest_path in completed_paths:
                     continue
 
-                try:
-                    os.remove(dest_path)
+                if _force_remove(dest_path):
                     deleted_count += 1
-                except OSError:
-                    pass
+
+            # Second pass: purge DUPLICATE_SKIPPED records whose surviving twin
+            # is missing or was just invalidated/deleted above.
+            for source_path, dest_path, size, part_hash, status, duplicate_of in rows:
+                if dest_path != "DUPLICATE_SKIPPED":
+                    continue
+                if status == "trashed":
+                    continue
+                if duplicate_of and (not os.path.exists(duplicate_of) or duplicate_of in bad_dest_paths):
+                    purged_sources.append(source_path)
         finally:
             engine.close()
 

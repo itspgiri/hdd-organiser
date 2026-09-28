@@ -1,22 +1,35 @@
 import os
+import sys
+import time
 import shutil
 import argparse
 import subprocess
+from datetime import datetime
 from typing import Dict, Tuple
 
 from rich.prompt import Prompt, Confirm
-from .utils import print_header, print_success, print_error, print_info, print_warning, get_progress_bar
+from .utils import (
+    print_header, print_success, print_error, print_info, print_warning,
+    get_progress_bar, format_size, get_default_history_file, save_run_to_history,
+)
 from .categorizer import Categorizer
-from .scanner import Scanner
+from .scanner import Scanner, split_source_paths
 from .dates import DateExtractor
-from .file_ops import FileEngine, safe_copy, copy_project_intact, project_already_copied
-from .api_organizer import OrganizerAPI, compute_relative_destination
+from .file_ops import (
+    FileEngine, safe_copy, copy_project_intact, project_already_copied,
+    PROJECT_IGNORE_PATTERNS, _HAS_NATIVE_COPYFILE,
+)
+from .api_organizer import (
+    OrganizerAPI, compute_relative_destination, build_live_photo_dates,
+    _is_apfs_volume,
+)
+
 
 def run_cli():
     print_header("Drive Organizer 🚀")
-    
+
     parser = argparse.ArgumentParser(description="Organize hard drives safely.")
-    parser.add_argument("source", nargs="?", help="Source directory")
+    parser.add_argument("source", nargs="?", help="Source directory (or comma-separated directories)")
     parser.add_argument("dest", nargs="?", help="Destination directory")
     parser.add_argument("--preview", action="store_true", help="Run a dry-run preview without copying")
     parser.add_argument("--copy", action="store_true", help="Execute file transfer without asking for confirmation")
@@ -30,7 +43,7 @@ def run_cli():
         if not source:
             print_error("Operation cancelled.")
             return
-            
+
     dest = args.dest
     if not dest:
         print_info("Opening folder selection dialog for destination...")
@@ -39,66 +52,136 @@ def run_cli():
             print_error("Operation cancelled.")
             return
 
-    if not os.path.exists(source):
-        print_error(f"Source path does not exist: {source}")
+    sources_list = split_source_paths(source)
+    if not sources_list:
+        print_error("No valid source directory provided.")
         return
 
-    source_abs = os.path.abspath(source)
-    dest_abs = os.path.abspath(dest)
+    for src_item in sources_list:
+        if not os.path.exists(src_item):
+            print_error(f"Source path does not exist: {src_item}")
+            return
+        if not os.path.isdir(src_item):
+            print_error(f"Source path is not a directory: {src_item}")
+            return
+
+    source_abs_list = [os.path.abspath(s) for s in sources_list]
+    source_abs = ", ".join(source_abs_list) if len(source_abs_list) > 1 else source_abs_list[0]
+    dest_abs = os.path.abspath(os.path.expanduser(dest.strip()))
 
     # Shared with the GUI: realpath+commonpath, so symlinks and sibling names
     # like /data vs /data-backup are handled correctly.
-    path_error = OrganizerAPI.validate_paths(source_abs, dest_abs)
+    path_error = OrganizerAPI.validate_paths(source_abs_list, dest_abs)
     if path_error:
         print_error(path_error)
         return
 
     print_success(f"Source: {source_abs}")
     print_success(f"Destination: {dest_abs}")
-    
-    import sys
+
     if getattr(sys, 'frozen', False):
         config_path = os.path.join(sys._MEIPASS, "config.json")
     else:
         config_path = os.path.join(os.path.dirname(__file__), "config.json")
-    
+
     if not os.path.exists(config_path):
         print_error("config.json is missing!")
         return
-        
+
     print_info("Loading configurations...")
     categorizer = Categorizer(config_path)
     # Stage unzipped archives on the destination, never on the source drive.
     scanner = Scanner(categorizer, staging_root=os.path.join(dest_abs, ".organizer_staging"))
-    
+
     print_header("Scan & Preview")
     print_info(f"Scanning {source_abs} for files... (This may take a minute)")
-    scanner.scan_directory(source_abs, is_preview=args.preview)
+    # Always scan in preview mode first unless --copy was explicitly passed,
+    # so archives are never extracted onto disk before the user confirms.
+    initial_preview_scan = bool(args.preview or not args.copy)
+    scanner.scan_directory(source_abs_list, is_preview=initial_preview_scan)
 
-    
-    # Calculate total size of files to process
+    # Calculate total size of files and intact code projects to process
     total_size_bytes = 0
+    unmeasured_files = 0
     for fp in scanner.files_to_process:
         try:
             total_size_bytes += os.path.getsize(fp)
         except OSError:
-            pass
-            
-    from .utils import format_size
-    print_success(f"Found {len(scanner.files_to_process)} files ({format_size(total_size_bytes)}) to organize.")
+            unmeasured_files += 1
+
+    ignore_fn = shutil.ignore_patterns(*PROJECT_IGNORE_PATTERNS)
+    for proj_path in scanner.projects_found:
+        for r, dirs, fs in os.walk(proj_path):
+            ignored = ignore_fn(r, dirs + fs)
+            dirs[:] = [d for d in dirs if d not in ignored]
+            for f in fs:
+                if f in ignored:
+                    continue
+                try:
+                    total_size_bytes += os.path.getsize(os.path.join(r, f))
+                except OSError:
+                    pass
+
+    if unmeasured_files and initial_preview_scan:
+        import zipfile
+        seen_zips = set()
+        for zip_path in scanner.processed_zips:
+            zp_real = os.path.realpath(zip_path) if os.path.exists(zip_path) else zip_path
+            if zp_real in seen_zips:
+                continue
+            seen_zips.add(zp_real)
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    total_size_bytes += sum(m.file_size for m in zf.infolist() if not m.is_dir())
+            except Exception:
+                try:
+                    total_size_bytes += os.path.getsize(zip_path)
+                except OSError:
+                    pass
+
+    size_str = format_size(total_size_bytes)
+    print_success(f"Found {len(scanner.files_to_process)} files ({size_str}) to organize.")
     print_success(f"Found {len(scanner.projects_found)} entire code projects.")
     if scanner.ignored_garbage_count > 0:
         print_info(f"Safely ignored {scanner.ignored_garbage_count} system/garbage files.")
-    
+    if scanner.skipped_dir_breakdown:
+        detail = ", ".join(
+            f"{name} x{count}"
+            for name, count in sorted(scanner.skipped_dir_breakdown.items(), key=lambda kv: -kv[1])
+        )
+        print_info(f"Skipped build/cache folders (not copied): {detail}")
+
     # Pre-flight disk space check
+    dest_parent = dest_abs
+    while dest_parent and not os.path.exists(dest_parent):
+        parent = os.path.dirname(dest_parent)
+        if parent == dest_parent:
+            break
+        dest_parent = parent
+
+    free_bytes = None
     try:
-        dest_parent = dest_abs if os.path.exists(dest_abs) else os.path.dirname(dest_abs)
         free_bytes = shutil.disk_usage(dest_parent).free
         print_info(f"Destination free space: {format_size(free_bytes)}")
-        if free_bytes < total_size_bytes:
-            print_warning("Destination drive free space is less than total file size. If running across different physical volumes, make sure you have sufficient space.")
     except Exception:
         pass
+
+    if free_bytes is not None and total_size_bytes > free_bytes and not args.preview:
+        same_volume = False
+        try:
+            dest_dev = os.stat(dest_parent).st_dev
+            same_volume = all(os.stat(s).st_dev == dest_dev for s in source_abs_list if os.path.exists(s))
+        except OSError:
+            pass
+        is_resume = os.path.exists(os.path.join(dest_abs, ".organizer_checkpoint.db"))
+        if is_resume:
+            print_warning("Destination free space is less than total source size, but continuing because this is a resumed transfer.")
+        elif same_volume and _HAS_NATIVE_COPYFILE and _is_apfs_volume(dest_parent):
+            print_warning("Destination free space is less than total source size, but continuing on same APFS volume (zero-copy cloning).")
+        else:
+            print_error(f"Not enough free space on destination: need {size_str}, only {format_size(free_bytes)} available.")
+            scanner.cleanup_staging()
+            return
 
     if len(scanner.files_to_process) == 0 and len(scanner.projects_found) == 0:
         print_warning("No files to move!")
@@ -113,15 +196,21 @@ def run_cli():
         if not Confirm.ask("Do you want to proceed with copying files?"):
             print_warning("Operation cancelled by user.")
             return
+        # If archives were only inspected in memory during the preview scan,
+        # perform the real extraction scan now that the user has confirmed.
+        if scanner.processed_zips:
+            scanner.scan_directory(source_abs_list, is_preview=False)
 
     # -------- Execution Phase --------
     print_header("Executing File Transfers")
-    
-    # 1. Spotlight Suppression & Write Check
+
+    # 1. Spotlight Suppression, Auto-Repair & Write Check
     try:
         os.makedirs(dest_abs, exist_ok=True)
         with open(os.path.join(dest_abs, ".metadata_never_index"), 'w') as f:
             f.write("")
+        api_helper = OrganizerAPI(config_path, print_info, lambda *a, **k: None)
+        api_helper.auto_repair_if_needed(dest_abs)
         engine = FileEngine(dest_abs)
     except (OSError, IOError, Exception) as e:
         if getattr(e, 'errno', None) == 30 or "Read-only" in str(e) or "readonly" in str(e).lower():
@@ -136,17 +225,10 @@ def run_cli():
 
     dates = DateExtractor(categorizer)
     engine.start_caffeinate()
-    
+
     try:
-        # Pre-pass: Index HEIC dates for Live Photos (pairs HEIC + MOV)
-        live_photo_dates: Dict[Tuple[str, str], Tuple[str, str]] = {}
-        for fp in scanner.files_to_process:
-            if fp.rsplit('.', 1)[-1].lower() == 'heic':
-                y, m = dates.extract_date(fp)
-                if y and m:
-                    dir_name, fn = os.path.split(fp)
-                    name_only = fn.rsplit('.', 1)[0]
-                    live_photo_dates[(dir_name, name_only)] = (y, m)
+        # Pre-pass: Index capture dates for Live Photo pairs
+        live_photo_dates = build_live_photo_dates(scanner.files_to_process, dates)
 
         with get_progress_bar() as progress:
 
@@ -155,6 +237,10 @@ def run_cli():
             for proj in scanner.projects_found:
                 proj_name = os.path.basename(proj)
                 dest_proj = os.path.join(dest_abs, "Code", proj_name)
+
+                if engine.is_project_dissolved(proj):
+                    progress.advance(proj_task)
+                    continue
 
                 # Projects are copied wholesale, so they need their own
                 # "already done" check, or a re-run clones each repository
@@ -186,31 +272,29 @@ def run_cli():
                 else:
                     print_warning(f"Issue copying code project {proj_name}: {proj_err}")
 
-
                 progress.advance(proj_task)
-
 
             # 3. Transfer Files
             file_task = progress.add_task("[cyan]Organizing Files...", total=len(scanner.files_to_process))
-            
+
             for file_path in scanner.files_to_process:
                 progress.advance(file_task)
-                
+
                 if engine.is_already_copied(file_path):
                     continue
-                
+
                 filename = os.path.basename(file_path)
                 rel_dest = compute_relative_destination(
                     categorizer, dates, file_path, live_photo_dates
                 )
-                    
+
                 target_base = os.path.join(dest_abs, rel_dest)
-                
+
                 try:
                     size = os.path.getsize(file_path)
                     mtime = os.path.getmtime(file_path)
                 except OSError:
-                    continue # File disappeared during run
+                    continue  # File disappeared during run
 
                 final_dest = None
                 try:
@@ -227,18 +311,43 @@ def run_cli():
                         engine.record_copy(file_path, final_dest, size, mtime, part_hash)
                 except Exception as file_err:
                     print_warning(f"Skipped problem file {filename}: {str(file_err)}")
+                    engine.record_copy(
+                        file_path, final_dest or "", size, mtime,
+                        part_hash="", status=f"failed: {str(file_err)}"
+                    )
                 finally:
                     if final_dest:
                         engine.release_reservation(final_dest)
 
+        scanner.cleanup_staging()
+
+        try:
+            history_file = get_default_history_file(os.path.dirname(config_path))
+            timestamp_str = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+            run_record = {
+                "id": f"run_{int(time.time())}",
+                "timestamp": timestamp_str,
+                "source": source_abs,
+                "dest": dest_abs,
+                "is_preview": False,
+                "dest_mode": "cli",
+                "total_files": len(scanner.files_to_process),
+                "total_size": size_str,
+                "projects_count": len(scanner.projects_found),
+                "status": "Completed",
+            }
+            save_run_to_history(history_file, run_record)
+        except Exception:
+            pass
 
         print_success("\nAll done! 100% of files organized safely.")
-    
+
     except Exception as e:
         print_error(f"\nError occurred: {str(e)}")
         print_info("Don't worry, progress is saved. Run again to resume where it left off.")
     finally:
         engine.close()
+
 
 def _macos_choose_folder(prompt_text: str) -> str:
     """Uses AppleScript to open a native macOS folder selection dialog."""
@@ -262,5 +371,7 @@ def _macos_choose_folder(prompt_text: str) -> str:
     )
     return result.stdout.strip()
 
+
 if __name__ == "__main__":
     run_cli()
+
