@@ -678,7 +678,7 @@ class OrganizerAPI:
         projects = []
         for item in sorted(os.listdir(code_dir)):
             full_path = os.path.join(code_dir, item)
-            if os.path.isdir(full_path) and item.lower() != "snippets":
+            if os.path.isdir(full_path) and item.lower() != "snippets" and not item.endswith(PARTIAL_SUFFIX):
                 file_count = 0
                 for _r, dirs, files in os.walk(full_path):
                     dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]

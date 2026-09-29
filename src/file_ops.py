@@ -358,31 +358,82 @@ PROJECT_IGNORE_PATTERNS = (
 )
 
 
+def project_staging_path(dest_dir: str) -> str:
+    """Hidden folder next to dest_dir that copy_project_intact() fills before
+    renaming it to dest_dir: ".<name>.organizer-partial"."""
+    parent, name = os.path.split(os.path.normpath(dest_dir))
+    return partial_path_for(os.path.join(parent, "." + name))
+
+
+def _remove_staging_tree(path: str):
+    """Deletes one of the organizer's own staging folders, including files
+    that carried a Finder lock or read-only mode over from their source."""
+    def _unlock_and_retry(func, failed_path, _exc_info):
+        for p in (os.path.dirname(failed_path), failed_path):
+            try:
+                _clear_immutable(p)
+                os.chmod(p, 0o700, follow_symlinks=False)
+            except (OSError, NotImplementedError):
+                pass
+        func(failed_path)
+
+    if os.path.lexists(path):
+        shutil.rmtree(path, onerror=_unlock_and_retry)
+
+
 def copy_project_intact(source_dir: str, dest_dir: str) -> Tuple[bool, str]:
     """Copies a detected code project, preserving its structure, symlinks, and history.
+
+    The copy is built in a hidden staging folder next to dest_dir (see
+    project_staging_path) and renamed to dest_dir only once every file is in
+    place. An interrupted run therefore never leaves a half-copied project,
+    with truncated files, under its final name (audit pass 1, finding P1-03);
+    the next run discards the staging folder and starts again. dest_dir must
+    not exist yet: callers pick a free name.
 
     Tries the timestamp-preserving exFAT-safe copy first and falls back if needed.
 
     Returns (ok, error_message).
     """
+    if os.path.lexists(dest_dir):
+        return False, f"Destination folder already exists: {dest_dir}"
     ignore = shutil.ignore_patterns(*PROJECT_IGNORE_PATTERNS)
+    staging = project_staging_path(dest_dir)
     try:
-        shutil.copytree(
-            source_dir, dest_dir,
-            symlinks=True,
-            dirs_exist_ok=True,
-            copy_function=safe_copy,
-            ignore_dangling_symlinks=True,
-            ignore=ignore
-        )
+        # A staging folder is only ever left by an interrupted copy of ours.
+        _remove_staging_tree(staging)
+        try:
+            shutil.copytree(
+                source_dir, staging,
+                symlinks=True,
+                copy_function=safe_copy,
+                ignore_dangling_symlinks=True,
+                ignore=ignore
+            )
+        except shutil.Error:
+            # On exFAT/FAT32, directory copystat(chflags) can raise Errno 22 (EINVAL)
+            # at the very end of copytree after all files have been copied intact.
+            if not project_already_copied(source_dir, staging):
+                raise
+        if os.path.lexists(dest_dir):
+            raise FileExistsError(f"Destination folder appeared during the copy: {dest_dir}")
+        # copytree carries a Finder lock on the project folder itself over to
+        # the staging folder, and a locked folder cannot be renamed.
+        root_flags = getattr(os.lstat(staging), "st_flags", 0)
+        if root_flags:
+            _clear_immutable(staging)
+        os.rename(staging, dest_dir)
+        if root_flags:
+            try:
+                os.chflags(dest_dir, root_flags)
+            except (OSError, AttributeError, NotImplementedError):
+                pass
         return True, ""
-    except shutil.Error as err:
-        # On exFAT/FAT32, directory copystat(chflags) can raise Errno 22 (EINVAL)
-        # at the very end of copytree after all files have been copied intact.
-        if project_already_copied(source_dir, dest_dir):
-            return True, ""
-        return False, str(err)
     except Exception as err:
+        try:
+            _remove_staging_tree(staging)
+        except Exception:
+            pass
         return False, str(err)
 
 

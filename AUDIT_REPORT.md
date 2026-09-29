@@ -150,6 +150,38 @@ summary table at the end of this section.
     `test_partial_name_fits_macos_name_limit` cover the new suffix. They error
     on `92ed5c1` because `partial_path_for` does not exist there.
 
+#### P1-03 (High): a crash during a code-project copy leaves a half-copied project
+
+- **Location:** `src/file_ops.py`, `copy_project_intact` (used by `run()` and
+  by the CLI); `src/api_organizer.py`, `list_code_projects`.
+- **What happens:** loose files are written to a temporary name and renamed
+  into place, but code projects were copied with `shutil.copytree` straight
+  into their final folder `Code/<name>`, file by file. A crash, power cut, or
+  unplugged drive in the middle left `Code/<name>` with some files missing and
+  one truncated. The next run did not recognise it as a copy (correctly), so it
+  copied the project again as `Code/<name>_1` and left the broken folder in
+  place. Both look like real projects; the owner may keep the broken one, or
+  dissolve it into the library, and wipe the source. This breaks G3.
+- **Steps to reproduce:** organize a source containing a project folder (with
+  a `package.json`) and kill the app while the project is being copied (the
+  test does this in a child process with `os._exit()` halfway through a file).
+  Run again: `Code/` holds `webapp` (broken) and `webapp_1`.
+- **Fix:** the project is copied into a hidden staging folder next to its final
+  place (`Code/.<name>.organizer-partial`, see `project_staging_path`) and
+  renamed to `Code/<name>` only once every file is in place. A staging folder
+  left by an interrupted run is discarded and the copy starts again. The
+  project list offered for dissolving (`list_code_projects`) never shows a
+  staging folder.
+- **Behaviour change to note:** a project that cannot be copied completely
+  (for example, one file is unreadable) is no longer left partly copied under
+  its final name. Nothing is placed, and the existing warning is logged; the
+  source is untouched. Previously the readable files were left in
+  `Code/<name>`.
+- **Status:** Fixed. Tests in `tests/test_pass1_project_copy_atomic.py`, both
+  fail on `92ed5c1`:
+  - `test_crash_during_project_copy_leaves_no_half_copied_project`
+  - `test_leftover_staging_folder_is_not_offered_as_a_project`
+
 #### P1-07 (High): parallel transfer workers crash the app with a segmentation fault
 
 - **Location:** `src/file_ops.py`, `FileEngine.is_already_copied`,
