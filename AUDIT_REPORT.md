@@ -7,7 +7,7 @@ A separate reviewer checks all passes at the end.
 
 | Pass | Scope | Status |
 |------|-------|--------|
-| 1 | Data safety in the organize flow's backend | In progress |
+| 1 | Data safety in the organize flow's backend | Complete |
 | 2 | Duplicates utility | Not started |
 | 3 | Web UI | Not started |
 | 4 | CLI and local API | Not started |
@@ -42,11 +42,16 @@ and the local API's auth. Anything spotted there is listed under
 - Read only the modules this scope needs: `src/api_organizer.py` (organize,
   verify, repair, dissolve, organize-flow duplicate actions),
   `src/file_ops.py`, `src/scanner.py`, `src/categorizer.py`, `src/utils.py`.
-- Reproduced each finding with an automated test on synthetic data in a
+  From `src/cli.py`, only the transfer loop was read, because it also calls
+  `copy_file`, which P1-10 changes.
+- Reproduced each fixed finding with an automated test on synthetic data in a
   private temp folder that the test deletes afterwards. Crashes are simulated
   in a child process that calls `os._exit()` halfway through writing a file,
   so no `finally` block, `atexit` handler, or database commit runs. That is as
-  close to a power cut or `kill -9` as a unit test can get.
+  close to a power cut or `kill -9` as a unit test can get. The findings that
+  are not fixed (P1-04, P1-08, P1-09) were reproduced the same way with
+  scratch scripts, which are not committed. Their entries give the exact
+  steps.
 - Each fix is its own commit, together with a test that fails on `92ed5c1`
   and passes with the fix. `make test` passes at every commit.
 
@@ -451,6 +456,83 @@ summary table at the end of this section.
   `test_preview_reports_exactly_what_the_project_copy_leaves_out` (fails on
   `92ed5c1`: `build`, `dist` and `target` are left out without being
   reported).
+
+### Summary
+
+| ID | Severity | Finding | Status | Commit | Tests in `tests/` |
+|----|----------|---------|--------|--------|-------------------|
+| P1-01 | Critical | Repair and auto-repair deleted the last copy of a file | Fixed | `79686ca` | `test_pass1_repair_keeps_last_copy.py` (3, plus 1 control) |
+| P1-02 | High | Organizing deleted the owner's `*.tmp` files | Fixed | `d116d4f` | `test_pass1_partial_file_naming.py` (4) |
+| P1-03 | High | A crash left a half-copied code project | Fixed | `7dc7e85` | `test_pass1_project_copy_atomic.py` (2) |
+| P1-04 | High | Dissolve permanently deletes `.git` and skipped folders | Not fixed: owner decision | `bd36613` (report only) | None |
+| P1-05 | Low | Preview deleted an archive staging folder | Fixed | `47da1c6` | `test_pass1_preview_staging.py` (1, plus 1 guard) |
+| P1-06 | Medium | Failed transfers reported "100% organized safely" | Fixed | `fe2c9f1` | `test_pass1_completion_report.py` (2, plus 1 control) |
+| P1-07 | High | SQLite race segfaulted parallel transfers | Fixed | `7ff333e` | `test_pass1_checkpoint_thread_safety.py` (2) |
+| P1-08 | Medium | Auto-unzipped archives are not copied; skipped members are silently left behind | Not fixed: owner decision | `6ef6fc4` (report only) | None |
+| P1-09 | Low | A resume records files as duplicates of their own copies | Not fixed: recommendation | `6ef6fc4` (report only) | None |
+| P1-10 | Low | `copy_file` replaced a file that appeared at its target | Fixed | `9019385` | `test_pass1_copy_never_replaces.py` (1) |
+| P1-11 | Medium | Preview did not report what a project copy leaves out | Fixed at the project's top level; deeper levels not fixed | `26b1822` | `test_pass1_project_skips_reported.py` (1) |
+
+Other pass-1 commits:
+- `ec70f48` started this report.
+- `bfc744c` added the guarantee tests for G1 to G3 (`test_pass1_guarantees.py`,
+  7 tests) and the shared fixtures in `tests/pass1_helpers.py`.
+- The commit that adds this summary is the last pass-1 commit.
+
+`make test` went from 122 tests at `92ed5c1` to 148: 26 new tests in 9 new
+test files, plus the shared `tests/pass1_helpers.py`.
+`tests/test_data_safety.py` also got one fixture change for P1-01.
+
+#### Running the new tests against `92ed5c1`
+
+Run from the repository root with this branch checked out. Any empty scratch
+folder works for `W`.
+
+```sh
+W=$(mktemp -d)/base-92ed5c1
+git worktree add --detach "$W" 92ed5c1
+git archive audit/full-app-audit-2026-09 tests/pass1_helpers.py \
+  $(git ls-tree --name-only audit/full-app-audit-2026-09 tests/ | grep 'tests/test_pass1_') \
+  | tar -x -C "$W"
+.venv/bin/python3 -c "import os,sys,unittest; os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); unittest.main(module=None, argv=['unittest','discover','-s','tests','-p','test_pass1_*.py','-v'])" "$W"
+git worktree remove --force "$W"
+```
+
+Result on 2026-09-29: 26 tests, 14 failures and 2 errors.
+- Every fix test fails, each for the reason its finding describes.
+- The 2 errors are P1-02's helper tests: `partial_path_for` does not exist on
+  `92ed5c1`.
+- The 10 tests that pass are expected to pass on both versions:
+  - the 7 guarantee tests: G1 to G3 hold on `92ed5c1` in the scenarios they
+    cover, and the violations are covered by the fix tests;
+  - 3 controls: P1-01's truncated-copy control, P1-05's readable-archive
+    guard, and P1-06's clean-run control.
+
+On `92ed5c1` the P1-07 race can also crash the whole test process. That
+happened in about 1 of 40 full-suite runs. If it happens, rerun.
+
+#### Not verified, or only partly verified
+
+- **P1-07 stress test:** it is probabilistic.
+  - On `92ed5c1` it crashed on every attempt.
+  - With the fix: no crash in 40 full-suite runs, or in about 380,000 lookups
+    from the repro script.
+  - A passing run cannot prove the race is gone. The deterministic cursor test
+    is the real guard.
+- **P1-04, P1-08 and P1-09:** these are not fixed, so there are no committed
+  tests for them. Each was reproduced with a scratch script on synthetic data;
+  the exact steps are in each entry.
+- **Crashes:** simulated with `os._exit()` in a child process. Real power
+  loss (disk write caches, file-system journaling) was not tested.
+- **File systems:** every test ran in a temp folder on the Mac's internal APFS
+  disk. No disk images were used, so behaviour on exFAT or FAT32, which is
+  likely for the owner's external drive, was not exercised. That covers the
+  `copy2` fallback, rename atomicity and `._*` files.
+- **Scale:** nothing was run at the owner's scale (2 TB, about 1 TB of
+  duplicates). The fixes add no extra scanning. P1-01 reads the source only
+  for files whose copy does not match.
+- **Remaining race windows:** P1-10 and the dissolve move still check, then
+  rename. An exclusive rename would close them.
 
 ### For later passes
 
