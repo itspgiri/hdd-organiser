@@ -28,9 +28,16 @@ GARBAGE_PREFIXES = (
 # Staging area for extracted archives; never user content.
 SKIP_ORGANIZER_DIRS = {".organizer_staging", ".Duplicates_Trash"}
 
-# Operating-system internals. Never user data, not worth reporting.
+# Operating-system internals, recycle bins, and sync-tool scratch/version
+# stores. Never user data, not worth reporting, and must never be copied into
+# the organized destination or outrank a live file during deduplication.
 SKIP_OS_DIRS = {
     ".Trash", ".Trashes", ".thumbnails", ".fseventsd", ".Spotlight-V100",
+    ".DocumentRevisions-V100", ".TemporaryItems", ".MobileBackups",
+    "Backups.backupdb",
+    "$RECYCLE.BIN", "$Recycle.Bin", "RECYCLER", "Recycled",
+    "System Volume Information",
+    ".dropbox.cache", ".stversions",
 }
 
 # Regenerable build output and dependency caches. These are *probably* junk,
@@ -47,6 +54,19 @@ SKIP_BUILD_DIRS = {
 }
 
 SKIP_SYSTEM_DIRS = SKIP_OS_DIRS | SKIP_BUILD_DIRS | SKIP_ORGANIZER_DIRS
+_SKIP_OS_AND_ORGANIZER_LOWER = {
+    d.lower() for d in (SKIP_OS_DIRS | SKIP_ORGANIZER_DIRS)
+}
+
+
+def is_skipped_system_dir(dirname: str) -> bool:
+    """True if `dirname` is an OS trash/system, build, or organizer directory."""
+    if not dirname:
+        return False
+    if dirname in SKIP_SYSTEM_DIRS or dirname.startswith(".unzipped_"):
+        return True
+    low = dirname.lower()
+    return low in _SKIP_OS_AND_ORGANIZER_LOWER or low.startswith(".trash-")
 
 _GDRIVE_TOKEN_RE = re.compile(
     r"(?:^|[^a-z0-9])(gdrive|takeout|icloud|onedrive|drive|cloud|download)(?:[^a-z0-9]|$)",
@@ -209,7 +229,7 @@ class Scanner:
         if not parts:
             return True
         for dir_part in parts[:-1]:
-            if dir_part == "__MACOSX" or dir_part in SKIP_SYSTEM_DIRS or dir_part.startswith(".unzipped_"):
+            if dir_part == "__MACOSX" or is_skipped_system_dir(dir_part):
                 return True
         base_f = parts[-1]
         if base_f == ".unzip_completed" or self.is_garbage(base_f):
@@ -282,7 +302,7 @@ class Scanner:
                             return []
                         dirs[:] = [
                             d for d in dirs
-                            if d not in SKIP_SYSTEM_DIRS and d != "__MACOSX" and not d.startswith(".unzipped_")
+                            if not is_skipped_system_dir(d) and d != "__MACOSX"
                         ]
                         for f in files:
                             base_f = os.path.basename(f)
@@ -403,7 +423,7 @@ class Scanner:
                 for root, dirs, files in os.walk(staging_dir):
                     dirs[:] = [
                         d for d in dirs
-                        if d not in SKIP_SYSTEM_DIRS and d != "__MACOSX" and not d.startswith(".unzipped_")
+                        if not is_skipped_system_dir(d) and d != "__MACOSX"
                     ]
                     for f in files:
                         base_f = os.path.basename(f)
@@ -453,7 +473,7 @@ class Scanner:
                     if cancel_check and cancel_check():
                         return
                     unpruned_dirs = list(dirs)
-                    dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
+                    dirs[:] = [d for d in dirs if not is_skipped_system_dir(d)]
                     items_set = set(unpruned_dirs) | set(files)
                     if root != src and root not in excluded and os.path.realpath(root) not in excluded and self.categorizer.is_project_root(root, items_set):
                         dirs.clear()
@@ -523,7 +543,7 @@ class Scanner:
                         if len(self.skipped_dirs) < 50:
                             self.skipped_dirs.append(os.path.join(root, d))
 
-                dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
+                dirs[:] = [d for d in dirs if not is_skipped_system_dir(d)]
 
                 # 3. Otherwise, process individual files
                 for file in files:

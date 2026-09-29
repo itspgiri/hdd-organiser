@@ -7,7 +7,7 @@ import threading
 import subprocess
 from flask import Flask, render_template, request, jsonify
 from .api_organizer import OrganizerAPI
-from .scanner import SKIP_SYSTEM_DIRS, GARBAGE_FILES
+from .scanner import SKIP_SYSTEM_DIRS, GARBAGE_FILES, is_skipped_system_dir
 from .utils import format_size, load_run_history, get_default_history_file
 
 # The server binds a local port, so without this any web page or local process
@@ -187,7 +187,7 @@ def inspect_folder():
     sample_files = []
     try:
         for root, dirs, files in os.walk(folder_path):
-            dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
+            dirs[:] = [d for d in dirs if not is_skipped_system_dir(d) and not d.startswith(".unzipped_")]
             for f in files[:20]:
                 if f in GARBAGE_FILES or f.startswith(("._", "~$")):
                     continue

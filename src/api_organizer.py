@@ -11,7 +11,7 @@ from typing import Callable, Dict, Tuple, Set, List, Optional
 from .categorizer import Categorizer, split_filename_ext
 from .scanner import (
     Scanner, split_source_paths, SKIP_SYSTEM_DIRS, SKIP_ORGANIZER_DIRS,
-    GARBAGE_FILES,
+    GARBAGE_FILES, is_skipped_system_dir,
 )
 from .dates import DateExtractor
 from .file_ops import (
@@ -716,7 +716,7 @@ class OrganizerAPI:
             if os.path.isdir(full_path) and item.lower() != "snippets" and not item.endswith(PARTIAL_SUFFIX):
                 file_count = 0
                 for _r, dirs, files in os.walk(full_path):
-                    dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
+                    dirs[:] = [d for d in dirs if not is_skipped_system_dir(d) and not d.startswith(".unzipped_")]
                     for f in files:
                         if f not in GARBAGE_FILES and not f.startswith(("._", "~$")):
                             file_count += 1
@@ -750,7 +750,7 @@ class OrganizerAPI:
             files_to_move = []
             for root, dirs, files in os.walk(project_folder_path):
                 # Do not dissolve .git or build/system caches into user categories!
-                dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
+                dirs[:] = [d for d in dirs if not is_skipped_system_dir(d) and not d.startswith(".unzipped_")]
                 for f in files:
                     if scanner_helper.is_garbage(f):
                         continue
@@ -794,7 +794,7 @@ class OrganizerAPI:
             # rmtree would destroy any user file that failed to move.
             leftovers = []
             for root, dirs, files in os.walk(project_folder_path):
-                dirs[:] = [d for d in dirs if d not in SKIP_SYSTEM_DIRS and not d.startswith(".unzipped_")]
+                dirs[:] = [d for d in dirs if not is_skipped_system_dir(d) and not d.startswith(".unzipped_")]
                 for f in files:
                     if not scanner_helper.is_garbage(f):
                         leftovers.append(os.path.join(root, f))
