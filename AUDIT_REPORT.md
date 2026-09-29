@@ -9,7 +9,7 @@ A separate reviewer checks all passes at the end.
 |------|-------|--------|
 | 1 | Data safety in the organize flow's backend | Complete |
 | 2 | Duplicates utility | Complete |
-| 3 | Web UI | Not started |
+| 3 | Web UI | In progress |
 | 4 | CLI and local API | Not started |
 
 ---
@@ -1249,3 +1249,91 @@ The run leaves no disk image attached (checked with `hdiutil info`).
     can call it.
 
 ---
+
+## Pass 3: Web UI
+
+### Scope
+
+In scope: every screen of the web UI (welcome, setup, progress, dry-run
+preview, duplicates, history and the post-transfer review tools), every button
+and pop-up, in light and dark mode: `src/templates/index.html`,
+`src/static/script.js` and `src/static/style.css`, and whether the UI shows
+what the backend actually did, including the responses passes 1 and 2
+changed. The backend was read only where the UI depends on it.
+
+Out of scope (left to pass 4): the CLI, and the local API's auth and
+endpoints as an attack surface.
+
+### Method
+
+- Automated browser tests drive the real app: `src/app.py`'s Flask app,
+  served from a thread in the test process on 127.0.0.1 at a free port, in a
+  Playwright browser at the app's window size (700 x 550). Every folder the
+  UI works on is synthetic, in a private temp folder that the test deletes.
+  The history file and the app's `base_dir` point into that folder, so
+  History and "Clear History" never touch `src/run_history.json`, and
+  `subprocess` in `src/app.py` and `src/api_organizer.py` is replaced by a
+  recorder, so no Finder window, folder picker, `diskutil` run or sound is
+  started. Fixtures are in `tests/pass3_helpers.py`.
+- Every test fails on any JavaScript error in the console (uncaught
+  exceptions and `console.error`). The browser's own "Failed to load
+  resource" line for an HTTP error status is allowed only when the test
+  provoked that status (the 409 and 500 responses from passes 1 and 2).
+- **Engine:** pywebview draws the app with WebKit (WKWebView) on macOS.
+  Playwright's WebKit build is ad-hoc signed and Santa blocks it on this Mac
+  ("blocked from executing because its trustworthiness cannot be
+  determined"), so the tests ran in Chromium (Chrome for Testing 148, which
+  Santa allows). `DRIVE_ORGANIZER_UI_BROWSER=webkit` runs them in WebKit
+  where it is allowed.
+- **Tools:** Playwright 1.60.0 is listed in the new `requirements-dev.txt`,
+  not in `requirements.txt`. It was installed into the app's `.venv` for this
+  pass (`.venv/bin/pip install -r requirements-dev.txt`); it uses the
+  browser builds already on this Mac (`chromium-1223`, `webkit-2287`), so no
+  browser was downloaded. To remove it again:
+  `.venv/bin/pip uninstall -y playwright pyee greenlet`. Without Playwright
+  the browser tests are skipped, not failed.
+- Each fix is its own commit, together with a test that fails on `92ed5c1`
+  and passes with the fix. `make test` passes at every commit.
+
+### Findings
+
+Same severity scale as passes 1 and 2: **Critical** means data loss is
+likely in normal use. **High** means data loss, or a broken guarantee, in a
+plausible scenario. **Medium** means misleading results that could lead the
+owner to delete data. **Low** means a narrow edge case or defence-in-depth.
+Most UI defects cannot lose data by themselves; those are rated **Low** even
+when a whole feature is broken, and the entry says what is broken.
+
+Findings are numbered in the order they were identified, not by severity.
+Commit hashes are listed in the summary table at the end of this section.
+
+#### P3-01 (Low): the preview dashboard's buttons call functions that do not exist
+
+- **Location:** `src/static/script.js`, `renderPreviewDashboard` and
+  `inspectProject`.
+- **What happens:** the dry-run dashboard was wired to functions that were
+  never written. Clicking a category ("View samples") threw
+  `showCategoryPreview is not defined`, "Inspect Ignored Files" threw
+  `showGarbageModal is not defined`, and unticking a code project threw
+  `toggleProjectExclusion is not defined`, so a project could not be marked
+  to be split up from its checkbox. The project's inspect button called
+  `inspectProject(path)` without the name, so its pop-up was titled
+  "Inspect Folder: undefined". The working functions existed under other
+  names (`inspectCategoryFiles`, `inspectGarbageFiles`,
+  `onProjectCheckboxChange`). Known before the audit.
+- **Steps to reproduce:** run a dry run on any folder with a code project
+  and click a category, "Inspect Ignored Files" or a project checkbox.
+- **Fix:** call the existing functions, and name the inspected folder from
+  its path when no name is passed.
+- **Status:** Fixed. Tests in `tests/test_pass3_preview_buttons.py` (all
+  four fail on `92ed5c1`):
+  - `test_category_button_fills_and_opens_the_samples_popup`
+  - `test_inspect_ignored_files_fills_and_opens_the_breakdown`
+  - `test_project_checkbox_marks_project_to_be_split_up`
+  - `test_project_inspect_button_names_the_project`
+
+  They check that each pop-up is filled and un-hidden; that it is actually
+  visible is P3-03.
+
+---
+

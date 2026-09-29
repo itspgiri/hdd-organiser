@@ -180,7 +180,7 @@ class AppServer:
 
 # A project folder name with an apostrophe (common on macOS: "Bob's app") and
 # the other characters HTML and JavaScript care about.
-TRICKY_PROJECT = "Bob's \"quoted\" <b>app</b>"
+TRICKY_PROJECT = "Bob's \"best\" <app> & co"
 
 
 def write(path, data=b"x"):

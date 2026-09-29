@@ -370,7 +370,7 @@ function renderPreviewDashboard(summary) {
             projsHtml += `
             <div class="project-row-item flex flex-col sm:flex-row sm:items-center justify-between p-2.5 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 gap-2">
                 <label class="flex items-start gap-2.5 cursor-pointer flex-1 overflow-hidden">
-                    <input type="checkbox" class="project-checkbox mt-1 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-100 border-slate-300 dark:bg-slate-700 dark:border-slate-600" value="${escapeHtml(p.path)}" ${checkedAttr} onchange="toggleProjectExclusion('${escapeHtml(p.path)}', this.checked)">
+                    <input type="checkbox" class="project-checkbox mt-1 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-100 border-slate-300 dark:bg-slate-700 dark:border-slate-600" value="${escapeHtml(p.path)}" ${checkedAttr} onchange="onProjectCheckboxChange('${escapeHtml(p.path)}', this.checked)">
                     <div class="truncate ${textStyle}">
                         <div class="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate" title="${escapeHtml(p.path)}">${escapeHtml(p.path.split('/').pop())}</div>
                         <div class="text-[10px] text-slate-400 truncate" title="${escapeHtml(p.path)}">${escapeHtml(p.path)}</div>
@@ -395,7 +395,7 @@ function renderPreviewDashboard(summary) {
                 <span class="text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-900/30 px-2.5 py-1 rounded-full">${gTotal.toLocaleString()} files</span>
             </div>
             <p class="text-xs text-slate-500 mb-3">Temporary system files that will be permanently ignored.</p>
-            <button class="w-full py-2 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-lg transition-colors border border-slate-200 dark:border-slate-700 flex justify-center items-center gap-2" onclick="showGarbageModal()">
+            <button class="w-full py-2 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-lg transition-colors border border-slate-200 dark:border-slate-700 flex justify-center items-center gap-2" onclick="inspectGarbageFiles()">
                 <i data-lucide="search" class="w-4 h-4"></i> Inspect Ignored Files
             </button>
         `;
@@ -446,7 +446,7 @@ function renderPreviewDashboard(summary) {
     document.querySelectorAll('.category-pill-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             const cat = e.currentTarget.getAttribute('data-category');
-            showCategoryPreview(cat);
+            inspectCategoryFiles(cat);
         });
     });
 
@@ -606,7 +606,8 @@ async function inspectProject(path, name) {
     const list = document.getElementById('inspect-files-list');
     const toggleBtn = document.getElementById('toggle-exclude-btn');
 
-    title.innerText = `Inspect Folder: ${name}`;
+    // The dashboard passes only the path (audit P3-01); name the folder from it.
+    title.innerText = `Inspect Folder: ${name || String(path).split('/').pop()}`;
     list.innerHTML = "<div>Loading files...</div>";
     modal.classList.remove('hidden');
 
