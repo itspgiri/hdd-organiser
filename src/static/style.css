@@ -18,6 +18,15 @@ body {
     to { opacity: 1; transform: translateY(0); }
 }
 
+/* The card (<main>) clips its children to its rounded corners. `hidden` alone
+   made the card the scroll container of its sticky nav and preview footer;
+   the card never scrolls (the page does), so neither stuck (audit P3-04).
+   `clip` clips without that; engines without it keep `hidden`. */
+.app-card {
+    overflow: hidden;
+    overflow: clip;
+}
+
 /* Breadcrumbs */
 .crumb {
     opacity: 0.5;

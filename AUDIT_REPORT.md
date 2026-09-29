@@ -1405,5 +1405,40 @@ Commit hashes are listed in the summary table at the end of this section.
   see-through with square corners; with the pop-ups moved but the old CSS,
   the dark-mode test fails with "backdrop is opaque: rgb(30, 41, 59)".
 
+#### P3-04 (Low): the dry-run dashboard is outside the card's padding, and its footer is cut off and not pinned
+
+- **Location:** `src/templates/index.html` (`#preview-view` and `<main>`) and
+  `src/static/style.css`.
+- **What happens:** every screen sits in the card's padded container except
+  the dry-run dashboard, which was placed after it, directly in the card. Its
+  content touched the card's left and right edges, under an empty 80 px band
+  (the container's padding, with every screen in it hidden). The footer's
+  negative margins, meant to cancel that padding, pushed the footer 40 px
+  past both sides of the card, and the card's `overflow: hidden` cut off the
+  right end of "Execute Full Transfer" (in the app's 700 x 550 window it
+  read "Execute Full Transfe"). The footer is meant to stay pinned
+  (`sticky bottom-0`), but `overflow: hidden` also makes the card the
+  footer's scroll container, and the card never scrolls (the page does), so
+  it was not pinned: on a long dashboard the owner had to scroll to the end
+  to find the buttons. The nav bar's `sticky top-0` failed the same way. The
+  misplaced dashboard and clipped footer were known before the audit; why
+  the footer was not pinned was not.
+- **Steps to reproduce:** run a dry run in the app's default window.
+- **Fix:** `#preview-view` moved into the padded container, after the
+  progress view. The card clips with `overflow: clip` instead of `hidden`
+  (class `.app-card` in `style.css`): it still clips to the rounded corners
+  but is not a scroll container, so the footer and the nav bar stick to the
+  window. The nav bar now stays at the top of long screens, as its classes
+  always asked. WebKit older than Safari 16 (2022) ignores `clip` and keeps
+  `hidden`: there the footer is inside the card but not pinned.
+- **Status:** Fixed. Tests in `tests/test_pass3_preview_layout.py` (all
+  three fail on `92ed5c1`):
+  - `test_footer_buttons_are_inside_the_card`
+  - `test_footer_stays_in_the_window_while_scrolling`
+  - `test_dashboard_lines_up_with_the_other_screens`
+
+  With the dashboard moved but the card still `overflow: hidden`, the second
+  test still fails.
+
 ---
 
