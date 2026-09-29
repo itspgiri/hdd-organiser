@@ -1957,7 +1957,7 @@ delete data. **Low** means a narrow edge case or defence-in-depth.
   `"All done! 100% of files organized safely."` whenever any file or project
   fails.
 - **Status:** Fixed in `67a5016`. Tests in
-  `tests/test_pass4_cli_completion_report.py` (4 tests).
+  `tests/test_pass4_cli_completion_report.py` (3, plus 1 control).
 
 #### P4-02 (Medium): CLI resolves a whitespace-only destination (`"   "`) to `os.getcwd()` before `validate_paths` and leaks archive staging when an archive has no transferable files
 
@@ -2078,7 +2078,7 @@ delete data. **Low** means a narrow edge case or defence-in-depth.
   transition `"running"` -> `"cancelling"` when
   `state.dup_status in ("running", "cancelling")`.
 - **Status:** Fixed in `3700ead`. Tests in
-  `tests/test_pass4_cancel_when_idle.py` (4 tests).
+  `tests/test_pass4_cancel_when_idle.py` (2, plus 2 controls).
 
 #### P4-06 (Medium): `/api/dup_scan_start` can permanently wedge `state.dup_status = "running"` on non-string `folder` inputs and accepts regular files; `/api/dup_empty_trash` lacks a concurrency guard
 
@@ -2230,18 +2230,18 @@ delete data. **Low** means a narrow edge case or defence-in-depth.
 
 | ID | Severity | Finding | Status | Commit | Tests in `tests/` |
 |----|----------|---------|--------|--------|-------------------|
-| P4-01 | High | CLI silently drops vanished/unreadable files and reports 100% success when files or code projects fail | Fixed | `67a5016` | `test_pass4_cli_completion_report.py` (4) |
+| P4-01 | High | CLI silently drops vanished/unreadable files and reports 100% success when files or code projects fail | Fixed | `67a5016` | `test_pass4_cli_completion_report.py` (3, plus 1 control) |
 | P4-02 | Medium | CLI resolves whitespace-only destination (`"   "`) to `os.getcwd()` and leaks staging on empty archive scan | Fixed | `ef2a486` | `test_pass4_cli_dest_validation.py` (3) |
 | P4-03 | High | `Scanner.scan_directory` and `extract_gdrive_zip` walk into `$RECYCLE.BIN`, `.Trash-1000`, `System Volume Information`, etc. | Fixed | `ba8a26f` | `test_pass4_scanner_os_trash.py` (3) |
 | P4-04 | Low | `/api/dup_reveal` reveals paths outside `state.dup_root` and calls `open -R` without `--` | Fixed | `2568897` | `test_pass4_dup_reveal_safety.py` (3) |
-| P4-05 | Low | `/api/cancel` and `/api/dup_scan_cancel` mutate state/logs when no operation is active | Fixed | `3700ead` | `test_pass4_cancel_when_idle.py` (4) |
+| P4-05 | Low | `/api/cancel` and `/api/dup_scan_cancel` mutate state/logs when no operation is active | Fixed | `3700ead` | `test_pass4_cancel_when_idle.py` (2, plus 2 controls) |
 | P4-06 | Medium | `/api/dup_scan_start` wedges `dup_status = "running"` on integer FD and accepts files; `/api/dup_empty_trash` lacks concurrency guard | Fixed | `ee447ee` | `test_pass4_dup_endpoints_state_and_path.py` (4) |
 | P4-07 | Low | Flask routes return HTTP 500 on non-dict JSON, non-string paths, or non-ASCII tokens, and `/api/open_finder` opens CWD on whitespace | Fixed | `7ffdf37` | `test_pass4_api_input_validation.py` (4) |
 | P4-08 | High | `Scanner.scan_directory` walks inside macOS package bundles (`.app`, `.photoslibrary`, `.vmwarevm`, `.pages`, `.scriv`) and scatters/deduplicates internal files | Not fixed: owner decision | Report only | None |
 
-`make test` went from 242 tests at `656576c` to 267 tests: 25 new tests across
-7 new `tests/test_pass4_*.py` files. All 25 new tests fail against `92ed5c1`
-and pass on `audit/full-app-audit-2026-09`.
+`make test` went from 242 tests at `656576c` to 267 tests: 25 new tests (22 regression tests plus 3 positive/negative controls) across
+7 new `tests/test_pass4_*.py` files. All 22 regression tests fail against `92ed5c1`,
+and all 25 pass on `audit/full-app-audit-2026-09`.
 
 #### Running the new Pass 4 tests against `92ed5c1`
 
@@ -2254,3 +2254,39 @@ for tf in tests/test_pass4_*.py; do
 done
 git worktree remove --force "$W"
 ```
+
+---
+
+## Independent Review
+
+An independent review of `audit/full-app-audit-2026-09` was conducted against all seven acceptance criteria:
+
+1. **Full test suite and pre-existing tests:**
+   - `make test` ran **267 tests in 142.836s** and passed (`OK`).
+   - Verified via `git diff 92ed5c1..HEAD` that none of the nine original pre-existing test files (`test_app_api.py`, `test_categorizer.py`, `test_cli_e2e.py`, `test_corruption.py`, `test_duplicates.py`, `test_edge_cases.py`, `test_file_ops.py`, `test_preview_and_controls.py`, `test_scanner.py`) were modified, weakened, or deleted (0 lines changed). Only `tests/test_data_safety.py` had the documented 6-line fixture update for `P1-01`.
+
+2. **Regression tests for all Fixed findings against `92ed5c1`:**
+   - Checked all 34 Fixed (or partially fixed) findings across Passes 1–4: every Fixed finding names at least one dedicated test in `tests/test_pass{1,2,3,4}_*.py`.
+   - Executed all 34 fix test files (105 total test methods: 89 regression tests + 16 documented positive/negative controls) in a detached worktree at `92ed5c1`:
+     - **Pass 1 (8 files, 19 tests):** all 16 regression tests fail or error on `92ed5c1` (14 `FAIL`, 2 `ERROR` where `partial_path_for` did not exist yet); the 3 documented controls pass.
+     - **Pass 2 (10 files, 32 tests):** all 23 regression tests fail or error on `92ed5c1` (21 test-method `FAIL`s [42 subtest failures] + 2 `ERROR`s on `P2-01` `AttributeError`); the 9 documented controls pass.
+     - **Pass 3 (9 files, 29 tests):** all 28 regression tests fail on `92ed5c1` (`P3-09`'s `test_the_whole_verification_result_is_visible` was also verified to fail on `c280a76` where the verification note overflowed the 240 px box); the 1 documented control (`test_clean_transfer_is_still_reported_as_complete`) passes.
+     - **Pass 4 (7 files, 25 tests):** all 22 regression tests fail on `AssertionError` against `92ed5c1` (after updating `test_pass4_dup_reveal_safety.py` `setUp` to use `getattr(app_mod.state, "dup_root", "")` so `92ed5c1` reaches `/api/dup_reveal` instead of raising `AttributeError` in `setUp`); the 3 control tests pass.
+
+3. **Data-safety guarantees (G1–G6), including zero-bytes-free volumes:**
+   - Verified `tests/test_pass1_guarantees.py` (7 end-to-end tests covering **G1** no last-copy deletion/overwrite, **G2** preview writes nothing to source or destination, and **G3** mid-transfer cancel and `os._exit` crash safety + resume).
+   - Verified `tests/test_pass2_guarantees.py` (13 tests covering **G4** last-copy survival across all selection/mutation/hard-link/outside-path cases, **G5** zero write syscalls during duplicate scans via `sys.addaudithook`, and **G6** duplicate scan, permanent delete, and trash emptying on real 0-bytes-free 48 MB `ExFAT` and `APFS` disk images mounted in private temp directories).
+
+4. **Automated browser coverage and zero JS console errors:**
+   - Verified that `tests/test_pass3_click_everything.py` (20 browser tests: 10 in light mode and 10 in dark mode, including `test_zz_every_control_in_the_page_was_used` enforcing 100% coverage of all static and 17 dynamic controls with `assertNoJsErrors()`) and the four known-issue suites (`test_pass3_preview_buttons.py`, `test_pass3_quotes_in_paths.py`, `test_pass3_modals.py`, `test_pass3_preview_layout.py`) ran and passed during `make test`.
+
+5. **Visual inspection of all 40 light and dark mode screenshots:**
+   - Inspected all 20 screenshots in `audit_screenshots/pass3/light/` and all 20 in `audit_screenshots/pass3/dark/` (`01-welcome.png` through `20-duplicates-results.png`).
+   - Confirmed that the dry-run dashboard aligns with the card padding, the sticky footer (`Cancel & Edit Settings`, `Execute Full Transfer`) is unclipped and pinned inside `.app-card`, all three preview modals (`07`–`09`) render visibly over a translucent blurred backdrop in both light and dark mode, folder names with quotes/angle brackets/ampersands (`Bob's "best" <app> & co`) render cleanly, and finished/problem/verification views (`11`, `12`, `16`, `17`, `18`) show full unclipped text without lingering Cancel buttons.
+
+6. **Repository and system safety:**
+   - Confirmed `main` is untouched at `92ed5c1e8ebadbd87bbc0ca8e89be76280dab42e` and `origin/main` is untouched at `f565400ecee4ee03c637fcac5864f525e14a5308`.
+   - Confirmed `git worktree list` contains only the main workspace and `hdiutil info` has no leftover test disk images mounted.
+
+7. **Report completeness:**
+   - Confirmed all 39 findings (`P1-01`..`P1-11`, `P2-01`..`P2-11`, `P3-01`..`P3-09`, `P4-01`..`P4-08`) document severity, exact file/function location, reproduction steps, and status.

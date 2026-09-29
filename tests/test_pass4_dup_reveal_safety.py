@@ -29,7 +29,7 @@ class Pass4DupRevealSafetyTests(unittest.TestCase):
         self.headers = {"X-Organizer-Token": app_mod.API_TOKEN}
 
         with app_mod.state_lock:
-            self.saved_dup_root = app_mod.state.dup_root
+            self.saved_dup_root = getattr(app_mod.state, "dup_root", "")
             app_mod.state.dup_root = ""
 
     def tearDown(self):
