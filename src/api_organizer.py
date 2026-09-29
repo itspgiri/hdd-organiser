@@ -474,6 +474,10 @@ class OrganizerAPI:
             total_items = total_projects + total_files
 
             # 1. Code Projects
+            # Failures are counted so the final summary cannot claim success
+            # when something was not copied (audit pass 1, finding P1-06).
+            failed_projects = []
+            failed_files = []
             for i, proj in enumerate(scanner.projects_found):
                 if self.cancelled:
                     self.log_cb("Operation cancelled by user. Progress saved.")
@@ -518,6 +522,7 @@ class OrganizerAPI:
                 if ok:
                     engine.record_project(proj, dest_proj)
                 else:
+                    failed_projects.append(proj_name)
                     self.log_cb(f"Warning: Issue copying code project {proj_name}: {proj_err}")
 
             # 2. Files - Multi-Threaded Parallel Execution (4 Workers)
@@ -548,7 +553,14 @@ class OrganizerAPI:
                 try:
                     size = os.path.getsize(file_path)
                     mtime = os.path.getmtime(file_path)
-                except OSError:
+                except OSError as stat_err:
+                    # Gone or unreadable since the scan. It used to be dropped
+                    # silently; say so, and record it so Verify reports it.
+                    self.log_cb(f"Warning: Skipped {filename}: it disappeared or became unreadable after the scan ({stat_err}).")
+                    engine.record_copy(file_path, "", 0, 0.0, part_hash="",
+                                       status="failed: disappeared or unreadable after the scan")
+                    with counter_lock:
+                        failed_files.append(file_path)
                     return
 
                 final_dest = None
@@ -581,6 +593,8 @@ class OrganizerAPI:
                     # it, and another file may legitimately own that path -- recording
                     # it would make repair_transfer delete a healthy file.
                     engine.record_copy(file_path, final_dest or "", size, mtime, part_hash="", status=f"failed: {reason}")
+                    with counter_lock:
+                        failed_files.append(file_path)
                 finally:
                     if final_dest:
                         engine.release_reservation(final_dest)
@@ -625,7 +639,14 @@ class OrganizerAPI:
             scanner.cleanup_staging()
 
             self._emit_progress(total_items, total_items, "Complete")
-            self.log_cb("All done! 100% of files organized safely.")
+            if failed_files or failed_projects:
+                self.log_cb(
+                    f"⚠️ Finished with problems: {len(failed_files)} file(s) and "
+                    f"{len(failed_projects)} code project(s) were not copied (see the warnings above). "
+                    "Do not erase the source until they have been copied."
+                )
+            else:
+                self.log_cb("All done! 100% of files organized safely.")
 
             # Record history
             try:
@@ -642,7 +663,9 @@ class OrganizerAPI:
                     "total_files": len(scanner.files_to_process),
                     "total_size": size_str,
                     "projects_count": len(scanner.projects_found),
-                    "status": "Completed"
+                    "failed_files": len(failed_files),
+                    "failed_projects": len(failed_projects),
+                    "status": "Completed with errors" if (failed_files or failed_projects) else "Completed"
                 }
                 save_run_to_history(history_file, run_record)
             except Exception:

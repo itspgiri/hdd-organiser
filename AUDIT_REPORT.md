@@ -206,6 +206,34 @@ summary table at the end of this section.
   - `test_preview_keeps_staging_folder_of_readable_archive` (guard; passes
     before and after)
 
+#### P1-06 (Medium): a transfer with failures ends with "100% of files organized safely"
+
+- **Location:** `src/api_organizer.py`, `OrganizerAPI.run()`: the final log
+  line, the history record, and `process_single_file`.
+- **What happens:** the run always ended with "All done! 100% of files
+  organized safely." and was saved to the history as "Completed", even when
+  files failed to copy (permission denied, FAT32 4 GB limit, iCloud
+  placeholder) or a whole code project failed. The only sign was a warning
+  somewhere above in a long log. Worse, a file that disappeared or became
+  unreadable between the scan and the copy was dropped without any log line,
+  record, or count, so Verify later reported a perfect transfer. The owner
+  decides from that last line whether the source can be erased.
+- **Steps to reproduce:** organize a folder containing a file you cannot read
+  (`chmod 000`). The log shows a warning, then "All done! 100% of files
+  organized safely.", and the history says "Completed".
+- **Fix:** failed files and failed projects are counted. A run with failures
+  now ends with "⚠️ Finished with problems: N file(s) and M code project(s)
+  were not copied (see the warnings above). Do not erase the source until they
+  have been copied." The history record gets `failed_files` and
+  `failed_projects`, and the status "Completed with errors". A file that
+  vanished after the scan is logged, counted, and recorded as failed, so Verify
+  lists it. `run()` still returns `True` in this case, so the UI's
+  success/error handling is unchanged (see "For later passes").
+- **Status:** Fixed. Tests in `tests/test_pass1_completion_report.py`:
+  - `test_failed_copy_is_not_reported_as_success` (fails on `92ed5c1`)
+  - `test_file_that_vanishes_after_the_scan_is_reported` (fails on `92ed5c1`)
+  - `test_clean_run_still_reports_success` (negative control)
+
 #### P1-07 (High): parallel transfer workers crash the app with a segmentation fault
 
 - **Location:** `src/file_ops.py`, `FileEngine.is_already_copied`,
@@ -245,4 +273,8 @@ summary table at the end of this section.
 
 ### For later passes
 
-_Items noticed outside pass 1's scope are added here._
+- **Pass 3 (web UI):** after P1-06, a transfer with failures still returns
+  success to the UI (`run()` returns `True`), so the UI shows its normal
+  "complete" state. Only the log and history say "Finished with problems" /
+  "Completed with errors". Consider showing a distinct warning state, and the
+  new `failed_files` / `failed_projects` history fields.
