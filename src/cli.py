@@ -230,6 +230,9 @@ def run_cli():
         # Pre-pass: Index capture dates for Live Photo pairs
         live_photo_dates = build_live_photo_dates(scanner.files_to_process, dates)
 
+        failed_projects = []
+        failed_files = []
+
         with get_progress_bar() as progress:
 
             # 2. Transfer Code Projects Intact
@@ -270,6 +273,7 @@ def run_cli():
                 if ok:
                     engine.record_project(proj, dest_proj)
                 else:
+                    failed_projects.append(proj_name)
                     print_warning(f"Issue copying code project {proj_name}: {proj_err}")
 
                 progress.advance(proj_task)
@@ -293,8 +297,16 @@ def run_cli():
                 try:
                     size = os.path.getsize(file_path)
                     mtime = os.path.getmtime(file_path)
-                except OSError:
-                    continue  # File disappeared during run
+                except OSError as stat_err:
+                    print_warning(
+                        f"Skipped {filename}: it disappeared or became unreadable after the scan ({stat_err})."
+                    )
+                    engine.record_copy(
+                        file_path, "", 0, 0.0, part_hash="",
+                        status="failed: disappeared or unreadable after the scan"
+                    )
+                    failed_files.append(file_path)
+                    continue
 
                 final_dest = None
                 try:
@@ -315,6 +327,7 @@ def run_cli():
                         file_path, final_dest or "", size, mtime,
                         part_hash="", status=f"failed: {str(file_err)}"
                     )
+                    failed_files.append(file_path)
                 finally:
                     if final_dest:
                         engine.release_reservation(final_dest)
@@ -334,13 +347,22 @@ def run_cli():
                 "total_files": len(scanner.files_to_process),
                 "total_size": size_str,
                 "projects_count": len(scanner.projects_found),
-                "status": "Completed",
+                "failed_files": len(failed_files),
+                "failed_projects": len(failed_projects),
+                "status": "Completed with errors" if (failed_files or failed_projects) else "Completed",
             }
             save_run_to_history(history_file, run_record)
         except Exception:
             pass
 
-        print_success("\nAll done! 100% of files organized safely.")
+        if failed_files or failed_projects:
+            print_warning(
+                f"\nFinished with problems: {len(failed_files)} file(s) and "
+                f"{len(failed_projects)} code project(s) were not copied (see the warnings above). "
+                "Do not erase the source until they have been copied."
+            )
+        else:
+            print_success("\nAll done! 100% of files organized safely.")
 
     except Exception as e:
         print_error(f"\nError occurred: {str(e)}")
