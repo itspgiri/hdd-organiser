@@ -1,0 +1,8 @@
+# Test-only tools. Not needed to run the app; see requirements.txt for that.
+# Install into the app's virtualenv with:
+#   .venv/bin/pip install -r requirements-dev.txt
+# Playwright 1.60.0 uses the browser builds chromium-1223 and webkit-2287
+# (`.venv/bin/python3 -m playwright install --dry-run` shows where they go;
+# `.venv/bin/python3 -m playwright install chromium` fetches Chromium if it
+# is missing).
+playwright==1.60.0
