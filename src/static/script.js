@@ -759,6 +759,7 @@ async function loadProjectReview() {
     const dest = document.getElementById('dest-path').value;
     const area = document.getElementById('review-content-area');
     area.classList.remove('hidden');
+    area.classList.add('max-h-60');
     area.innerHTML = "<div>Loading Code Projects...</div>";
 
     try {
@@ -827,6 +828,7 @@ async function loadDuplicateCleaner() {
     const dest = document.getElementById('dest-path').value;
     const area = document.getElementById('review-content-area');
     area.classList.remove('hidden');
+    area.classList.add('max-h-60');
     area.innerHTML = "<div>Checking for duplicate files...</div>";
 
     try {
@@ -1014,6 +1016,9 @@ async function runVerificationChecker() {
     const area = document.getElementById('review-content-area');
     if (!dest) return;
     area.classList.remove('hidden');
+    // Shown in full: its "Not covered by this check" note used to fall below
+    // the box's 240 px limit (audit P3-09). The list tools put the limit back.
+    area.classList.remove('max-h-60');
     area.innerHTML = "<div>Checking the copied files at the destination (size, and the first and last 1 MB of up to 10,000 files)...</div>";
 
     try {

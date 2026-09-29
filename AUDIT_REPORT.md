@@ -1575,5 +1575,30 @@ Commit hashes are listed in the summary table at the end of this section.
     after the page loads)
   - `test_no_element_has_an_attribute_twice` (parses the template)
 
+#### P3-09 (Low): review-tool warnings are not red, and the verification result is cut off
+
+- **Location:** `src/static/style.css`, `src/static/script.js`
+  (`runVerificationChecker`, `loadProjectReview`, `loadDuplicateCleaner`).
+- **What happens:**
+  - Six warnings in the review tools use `var(--danger-color)`, a CSS
+    variable that is defined nowhere, so they show in the ordinary text
+    colour. One of them is "⚠️ Verification could not run (HTTP …). Your
+    files were **not** verified — do not delete the source drive."
+  - The verification result sits in a box limited to 240 px. After P3-06
+    added the note on what the check does not cover, the note fell partly
+    below the box's edge, behind a scroll bar (243 px of content in a
+    238 px box at the test window's width, more when the amber title wraps).
+    This part is a regression from P3-06.
+- **Fix:** `--danger-color` is defined (red in light mode, a lighter red in
+  dark mode). The verification result is shown at full height (its lists
+  are capped at 10 names by `verify_transfer`); the project and duplicate
+  lists keep their 240 px scroll box.
+- **Status:** Fixed. Tests in `tests/test_pass3_result_messages.py`:
+  - `test_verification_failure_warning_is_red` and
+    `test_warning_is_red_in_dark_mode_too` (fail on `92ed5c1`)
+  - `test_the_whole_verification_result_is_visible` (fails on `c280a76`,
+    where the note was cut off; on `92ed5c1` it fails because the note did
+    not exist yet)
+
 ---
 

@@ -27,6 +27,16 @@ body {
     overflow: clip;
 }
 
+/* script.js colours its warnings with var(--danger-color) ("Verification
+   could not run ... do not delete the source drive"); nothing defined it, so
+   they showed in the ordinary text colour (audit P3-09). */
+:root {
+    --danger-color: #dc2626;
+}
+.dark {
+    --danger-color: #f87171;
+}
+
 /* Breadcrumbs */
 .crumb {
     opacity: 0.5;
