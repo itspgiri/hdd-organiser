@@ -1553,5 +1553,27 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_cancel_still_works_during_a_run`
   - `test_history_check_does_not_look_like_a_run`
 
+#### P3-08 (Low): small layout defects: Back button, a missing icon, a broken spinner
+
+- **Location:** `src/static/script.js` (`showView`, `navigateBack`) and
+  `src/templates/index.html`.
+- **What happens:**
+  - The nav's Back button shows its arrow above the word "Back", not beside
+    it: `showView` sets the button's `display` to `inline-block`, which
+    undoes its `flex` layout.
+  - "Run Integrity Verification Checker" has no icon. `check-shield` is not
+    a Lucide icon (`shield-check` is), so the placeholder stays empty.
+  - The progress heading's spinner has two `class` attributes. Browsers keep
+    only the first, so it has no size, colour or spin. (It is replaced by
+    the heading text before a run is shown, so it is rarely seen.)
+- **Fix:** `display: flex`, `shield-check`, and one merged `class`
+  attribute.
+- **Status:** Fixed. Tests in `tests/test_pass3_layout_details.py` (all
+  three fail on `92ed5c1`):
+  - `test_back_button_arrow_sits_beside_its_label`
+  - `test_every_icon_in_the_page_exists` (no Lucide placeholder is left
+    after the page loads)
+  - `test_no_element_has_an_attribute_twice` (parses the template)
+
 ---
 

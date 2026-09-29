@@ -175,7 +175,7 @@ function showView(viewId) {
 
     // Update back button & breadcrumbs
     const backBtn = document.getElementById('nav-back-btn');
-    backBtn.style.display = (viewHistory.length > 1 && !isTransferActive) ? 'inline-block' : 'none';
+    backBtn.style.display = (viewHistory.length > 1 && !isTransferActive) ? 'flex' : 'none';
 
     document.querySelectorAll('.crumb').forEach(c => c.classList.remove('active'));
     if (viewId === 'guide-view') document.getElementById('crumb-guide').classList.add('active');
@@ -200,7 +200,7 @@ function navigateBack() {
         document.getElementById(prevView).classList.add('active');
 
         const backBtn = document.getElementById('nav-back-btn');
-        backBtn.style.display = viewHistory.length > 1 ? 'inline-block' : 'none';
+        backBtn.style.display = viewHistory.length > 1 ? 'flex' : 'none';
 
         document.querySelectorAll('.crumb').forEach(c => c.classList.remove('active'));
         if (prevView === 'guide-view') document.getElementById('crumb-guide').classList.add('active');
