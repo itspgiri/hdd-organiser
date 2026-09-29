@@ -744,3 +744,42 @@ Commit hashes are listed in the summary table at the end of this section.
   refuses.
 - **Status:** Fixed. Test in `tests/test_pass2_concurrent_removal.py` (fails
   on `92ed5c1`): `test_concurrent_requests_cannot_remove_every_copy`.
+
+#### P2-05 (Medium): "freed X of disk space" counts file sizes, not the space actually freed
+
+- **Location:** `src/api_organizer.py`, `OrganizerAPI.trash_inplace_duplicates`
+  (permanent delete) and `empty_duplicates_trash`. The UI shows the number
+  they return as "Successfully deleted N duplicate files and freed X of disk
+  space!" and "Emptied .Duplicates_Trash: … freed X!".
+- **What happens:** both added up the sizes of the files they deleted. On
+  APFS, a copy made with Finder's Duplicate, or by copying within the same
+  volume, is a clone that shares its blocks with the original. Deleting it
+  frees almost nothing. The same is true of a file with another hard link
+  outside the scanned folder, or a file that a snapshot still holds (Time
+  Machine keeps local snapshots of APFS drives it backs up). On a real APFS
+  image, deleting a 4 MB clone freed 0 bytes and the utility reported 4 MB
+  freed. On a nearly full drive the owner would believe the space was
+  recovered and act on that, for example by deleting more. exFAT has no
+  clones, so this only affects an APFS drive.
+- **Steps to reproduce:** on an APFS volume, make `Album/clip.mov` and
+  `cp -c Album/clip.mov Backup/clip.mov`. Scan and permanently delete the
+  copy: the utility reports the file's size as freed, and `df` shows no
+  change. Emptying a `.Duplicates_Trash` that holds a clone does the same.
+- **Fix:** both operations read the volume's free space before and after,
+  and report what the drive actually gained, capped at the deleted files'
+  total size. A gain within 1% (at least 1 MiB) of that size counts as all
+  of it, so metadata blocks APFS allocates meanwhile are not reported as a
+  shortfall. When the drive gained less, the log says so and gives the
+  likely reasons. Anything else writing to the drive during the delete can
+  only make the number lower, never higher. Quarantine still reports the
+  size moved; the UI already says that no space is freed until the trash is
+  emptied.
+- **Behaviour change to note:** the number the UI shows after a permanent
+  delete or emptying the trash is now the measured gain. On exFAT, or on
+  APFS without clones, it is the same as before.
+- **Status:** Fixed. Tests in `tests/test_pass2_reported_space.py`, run on a
+  real 64 MB APFS disk image (the first two fail on `92ed5c1`):
+  - `test_permanent_delete_of_clone_does_not_claim_space`
+  - `test_emptying_trash_of_clone_does_not_claim_space`
+  - `test_permanent_delete_of_real_copy_reports_its_size` (control, passes
+    before and after)

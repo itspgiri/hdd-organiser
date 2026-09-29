@@ -1006,7 +1006,11 @@ class OrganizerAPI:
         - If permanent_delete=False: moves files into root_folder/.Duplicates_Trash/.
         - Every file is re-verified against a surviving unselected twin from its group
           before removal so the user can NEVER delete all copies of a file.
-        Returns (removed_count, refused_list, bytes_reclaimed).
+        Returns (removed_count, refused_list, bytes_reclaimed). For a permanent
+        delete, bytes_reclaimed is the free space the drive actually gained,
+        capped at the deleted files' total size; for a quarantine it is the
+        total size of the files moved (no space is freed until the trash is
+        emptied).
         """
         # The app builds a new OrganizerAPI per request and Flask serves
         # requests in parallel. Two requests keeping different copies of the
@@ -1067,6 +1071,7 @@ class OrganizerAPI:
         removed_count = 0
         bytes_reclaimed = 0
         refused = []
+        free_before = self._volume_free_bytes(root_folder) if permanent_delete else None
 
         for raw_path in source_paths:
             if not raw_path:
@@ -1145,7 +1150,46 @@ class OrganizerAPI:
                 except Exception as e:
                     refused.append(f"{os.path.basename(file_path)}: could not be moved ({e}).")
 
+        if permanent_delete:
+            bytes_reclaimed = self._space_actually_freed(
+                bytes_reclaimed, free_before, root_folder, f"Deleted {removed_count:,} duplicate(s)"
+            )
         return removed_count, refused, bytes_reclaimed
+
+    @staticmethod
+    def _volume_free_bytes(path: str) -> Optional[int]:
+        try:
+            st = os.statvfs(path)
+        except OSError:
+            return None
+        return st.f_bavail * st.f_frsize
+
+    def _space_actually_freed(
+        self, logical: int, free_before: Optional[int], path: str, what: str
+    ) -> int:
+        """Free space the drive gained, capped at the deleted files' total size.
+
+        Deleting an APFS clone (what Finder's Duplicate, or a copy within one
+        APFS volume, makes), a file with another hard link, or a file a
+        snapshot still holds frees almost nothing. The utility used to report
+        the files' sizes as freed regardless (audit P2-05). A gain within 1%
+        (at least 1 MiB) of the files' size counts as all of it, so metadata
+        blocks the file system allocates meanwhile are not reported as a
+        shortfall. Anything else writing to the drive at the same time makes
+        the result an underestimate, never an overestimate.
+        """
+        free_after = self._volume_free_bytes(path)
+        if free_before is None or free_after is None:
+            return logical
+        gained = max(0, free_after - free_before)
+        if gained + max(1024 * 1024, logical // 100) >= logical:
+            return logical
+        self.log_cb(
+            f"{what}: {logical:,} bytes of file data, but the drive's free space "
+            f"grew by only {gained:,} bytes. The deleted copies shared storage with "
+            f"other files (APFS clones or hard links), or a snapshot still holds them."
+        )
+        return gained
 
     def empty_duplicates_trash(self, root_folder: str) -> Tuple[int, int, str]:
         """Permanently deletes root_folder/.Duplicates_Trash to reclaim disk space."""
@@ -1164,6 +1208,7 @@ class OrganizerAPI:
 
         files_deleted = 0
         bytes_freed = 0
+        free_before = self._volume_free_bytes(trash_dir)
         for root, dirs, files in os.walk(trash_dir, topdown=False):
             for f in files:
                 fp = os.path.join(root, f)
@@ -1184,11 +1229,16 @@ class OrganizerAPI:
                     os.rmdir(dp)
                 except OSError:
                     pass
+        err = ""
         try:
             shutil.rmtree(trash_dir, ignore_errors=True)
         except Exception as e:
-            return files_deleted, bytes_freed, str(e)
-        return files_deleted, bytes_freed, ""
+            err = str(e)
+        bytes_freed = self._space_actually_freed(
+            bytes_freed, free_before, os.path.dirname(trash_dir),
+            f"Emptied .Duplicates_Trash ({files_deleted:,} files)",
+        )
+        return files_deleted, bytes_freed, err
 
 
     def get_duplicate_records(self, dest_abs: str):
