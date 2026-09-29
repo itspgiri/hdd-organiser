@@ -1440,5 +1440,36 @@ Commit hashes are listed in the summary table at the end of this section.
   With the dashboard moved but the card still `overflow: hidden`, the second
   test still fails.
 
+#### P3-05 (Medium): a transfer with failures is reported as "Organization Complete!"
+
+- **Location:** `src/static/script.js` (`startPolling`), `src/app.py`
+  (`/api/status`, `run_organizer`) and `src/api_organizer.py` (`run()`).
+- **What happens:** since P1-06 the organizer counts the files and code
+  projects it could not copy, logs "⚠️ Finished with problems … Do not erase
+  the source until they have been copied." and saves the run as "Completed
+  with errors". But `run()` still returns `True`, so the status is
+  `complete`, the progress screen's heading reads "Organization Complete!"
+  and the review tools appear as after a clean run. `/api/status` carried no
+  failure information, so the UI could not know. The only sign was one line
+  in a long log. The owner decides from this screen whether the source can
+  be erased (P1-06), so this is a misleading result that could lead to
+  deleting data. Pass 1 listed it for pass 3.
+- **Steps to reproduce:** organize a folder that holds a code project with
+  one unreadable file (`chmod 000`). The project is not copied; the heading
+  says "Organization Complete!".
+- **Fix:** `run()` keeps the counts in `last_run_failures`, `run_organizer`
+  copies them into the shared state, and `/api/status` returns them as
+  `run_summary` (`failed_files`, `failed_projects`, and up to 20
+  `failed_project_names`). When a full run ends with failures, the heading
+  reads "⚠️ Finished with problems" and a red box under the progress bar
+  says "N file(s) and M code project(s) were not copied. The warnings in the
+  log say why. Do not erase the source until they have been copied.", and
+  names the projects. `run()`'s return value and the `complete` status are
+  unchanged.
+- **Status:** Fixed. Tests in `tests/test_pass3_failed_transfer.py`:
+  - `test_transfer_with_a_failed_project_is_not_reported_as_complete` (fails
+    on `92ed5c1`)
+  - `test_clean_transfer_is_still_reported_as_complete` (negative control)
+
 ---
 

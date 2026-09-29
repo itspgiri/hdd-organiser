@@ -7,9 +7,37 @@ let lastWasPreview = false;
 let lastPreviewSummary = null;
 let allLogs = [];
 let isTransferActive = false;
+// What the last full run could not copy, or null (audit P3-05).
+let lastRunProblems = null;
 
 function onSourceInputChanged() {
     excludedProjects = [];
+}
+
+// /api/status's run_summary -> {files, projects, names} when anything was not
+// copied, else null.
+function runProblems(summary) {
+    const s = summary || {};
+    const files = Number(s.failed_files) || 0;
+    const projects = Number(s.failed_projects) || 0;
+    if (!files && !projects) return null;
+    return { files, projects, names: Array.isArray(s.failed_project_names) ? s.failed_project_names : [] };
+}
+
+function showRunProblems(problems) {
+    const box = document.getElementById('run-problems');
+    if (!box) return;
+    if (!problems) {
+        box.classList.add('hidden');
+        box.innerHTML = '';
+        return;
+    }
+    const names = problems.names.length
+        ? `<div class="mt-2 text-xs">Code projects not copied: ${problems.names.map(escapeHtml).join(', ')}</div>`
+        : '';
+    box.innerHTML = `<strong>${problems.files} file(s) and ${problems.projects} code project(s) were not copied.</strong>
+        The warnings in the log say why. Do not erase the source until they have been copied.${names}`;
+    box.classList.remove('hidden');
 }
 
 // Anything that comes off the user's disk -- file names, folder names, full
@@ -75,7 +103,14 @@ function startPolling() {
                 if (doneBtn) doneBtn.disabled = false;
 
                 if (data.status === 'complete') {
-                    if (heading) heading.innerText = lastWasPreview ? "Preview Complete!" : "Organization Complete!";
+                    // 'complete' includes runs where files or code projects
+                    // were not copied (P1-06); run_summary says (audit P3-05).
+                    lastRunProblems = lastWasPreview ? null : runProblems(data.run_summary);
+                    showRunProblems(lastRunProblems);
+                    if (heading) {
+                        heading.innerText = lastWasPreview ? "Preview Complete!"
+                            : (lastRunProblems ? "⚠️ Finished with problems" : "Organization Complete!");
+                    }
 
                     if (lastWasPreview) {
                         lastPreviewSummary = data.preview_summary;
@@ -253,6 +288,8 @@ async function startOrganizing() {
             isTransferActive = true;
             lastWasPreview = isPreview;
             document.getElementById('review-panel').classList.add('hidden');
+            lastRunProblems = null;
+            showRunProblems(null);
             
             const fill = document.getElementById('progress-fill');
             const percentTxt = document.getElementById('progress-percentage');

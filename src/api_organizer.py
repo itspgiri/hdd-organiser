@@ -644,6 +644,13 @@ class OrganizerAPI:
             scanner.cleanup_staging()
 
             self._emit_progress(total_items, total_items, "Complete")
+            # run() returns True for a run with failures too; the web UI reads
+            # this to say so instead of "Organization Complete!" (audit P3-05).
+            self.last_run_failures = {
+                "failed_files": len(failed_files),
+                "failed_projects": len(failed_projects),
+                "failed_project_names": list(failed_projects[:20]),
+            }
             if failed_files or failed_projects:
                 self.log_cb(
                     f"⚠️ Finished with problems: {len(failed_files)} file(s) and "

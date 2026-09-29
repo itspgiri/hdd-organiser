@@ -128,12 +128,14 @@ class AppServer:
     def start(self):
         import logging
         from werkzeug.serving import make_server
+        from src import file_ops as ops_mod
         logging.getLogger("werkzeug").setLevel(logging.ERROR)
         self._saved = (app_mod.base_dir, app_mod.subprocess, api_mod.subprocess,
-                       os.environ.get("DRIVE_ORGANIZER_HISTORY_FILE"))
+                       ops_mod.subprocess, os.environ.get("DRIVE_ORGANIZER_HISTORY_FILE"))
         app_mod.base_dir = self.base
         app_mod.subprocess = self.recorder
         api_mod.subprocess = self.recorder
+        ops_mod.subprocess = self.recorder  # `caffeinate` during a transfer
         os.environ["DRIVE_ORGANIZER_HISTORY_FILE"] = self.history_file
         reset_app_state()
         self._httpd = make_server("127.0.0.1", 0, app_mod.app, threaded=True)
@@ -154,7 +156,19 @@ class AppServer:
             time.sleep(0.05)
         return False
 
+    def wait_run_ended(self, timeout=60.0):
+        """Waits for the organizer to reach complete/error/cancelled (not idle)."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with app_mod.state_lock:
+                status = app_mod.state.status
+            if status in ("complete", "error", "cancelled"):
+                return status
+            time.sleep(0.05)
+        raise AssertionError(f"the run did not end within {timeout}s")
+
     def stop(self):
+        from src import file_ops as ops_mod
         if self._httpd is not None:
             self._httpd.shutdown()
             self._httpd.server_close()
@@ -162,10 +176,11 @@ class AppServer:
             self._httpd = None
         self.wait_idle()
         if self._saved is not None:
-            base, app_sub, api_sub, hist = self._saved
+            base, app_sub, api_sub, ops_sub, hist = self._saved
             app_mod.base_dir = base
             app_mod.subprocess = app_sub
             api_mod.subprocess = api_sub
+            ops_mod.subprocess = ops_sub
             if hist is None:
                 os.environ.pop("DRIVE_ORGANIZER_HISTORY_FILE", None)
             else:
@@ -344,6 +359,19 @@ class UITestCase(unittest.TestCase):
         self.click("#start-btn")
         self.wait_for("document.getElementById('preview-view').classList.contains('active')")
         return source, dest
+
+    def run_transfer(self, source=None, dest=None, dark=False):
+        """Welcome -> Setup -> Start (a real run into the sandbox) -> its end state."""
+        source = source or make_source_drive(self.path("source"))
+        dest = dest or self.path("dest", "Sorted")
+        self.open_app(dark=dark)
+        self.fill_setup(source, dest, preview=False)
+        self.click("#start-btn")
+        status = self.server.wait_run_ended()
+        # "Return to Setup" starts disabled and is enabled only when the poll
+        # loop draws the end state (a fresh page runs one transfer here).
+        self.wait_for("!document.getElementById('done-btn').disabled && pollInterval === null")
+        return source, dest, status
 
     def modal_state(self, modal_id):
         """Is the modal displayed, is its panel inside the window, is it on top?"""

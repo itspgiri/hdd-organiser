@@ -35,6 +35,7 @@ class UIState:
     eta = ""
     logs = []
     preview_summary = {}
+    run_summary = {}  # failed_files / failed_projects of the last full run (audit P3-05)
 
     # Standalone Duplicate Scanner State
     dup_status = "idle"
@@ -61,6 +62,7 @@ def reset_state():
         state.eta = ""
         state.logs = []
         state.preview_summary = {}
+        state.run_summary = {}
 
 
 def log_cb(msg: str):
@@ -168,6 +170,7 @@ def start():
         state.eta = ""
         state.logs = []
         state.preview_summary = {}
+        state.run_summary = {}
 
     thread = threading.Thread(target=run_organizer, args=(source, dest, is_preview, dest_mode, excluded_projects))
     thread.daemon = True
@@ -209,7 +212,8 @@ def get_status():
             "message": state.message,
             "eta": state.eta,
             "logs": list(state.logs),
-            "preview_summary": state.preview_summary
+            "preview_summary": state.preview_summary,
+            "run_summary": state.run_summary,
         })
 
 
@@ -707,6 +711,7 @@ def run_organizer(source, dest, is_preview=False, dest_mode="new", excluded_proj
         with state_lock:
             if hasattr(api, 'last_preview_summary'):
                 state.preview_summary = api.last_preview_summary
+            state.run_summary = dict(getattr(api, "last_run_failures", None) or {})
             if success:
                 state.status = "complete"
             else:
