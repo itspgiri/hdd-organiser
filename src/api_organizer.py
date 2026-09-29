@@ -839,11 +839,32 @@ class OrganizerAPI:
         # completed on a real drive (audit P2-01).
         categorizer = Categorizer(self.config_path)
 
+        # Folders that macOS treats as one document (packages). Their files
+        # belong together: deleting one "duplicate" inside breaks the whole
+        # document, library or virtual machine. Everything after the first
+        # three lines was missing, so for example identical unused extents
+        # of a split VMware disk inside a .vmwarevm, or an image inside a
+        # Pages package that also exists loose, were offered for deletion
+        # (audit P2-09). Folders laid out as a bundle (Contents/Info.plist)
+        # are skipped below whatever their extension.
         PACKAGE_BUNDLE_EXTS = (
             ".app", ".photoslibrary", ".photolibrary", ".aplibrary",
             ".fcpbundle", ".logicx", ".band", ".xcodeproj", ".xcworkspace",
             ".rtfd", ".framework", ".bundle", ".plugin", ".kext",
             ".imovielibrary", ".tvlibrary", ".musiclibrary",
+            # Virtual machines and disk images
+            ".vmwarevm", ".pvm", ".utm", ".sparsebundle", ".backupbundle",
+            # Photo and media libraries and catalogs
+            ".migratedphotolibrary", ".lrlibrary", ".lrdata", ".cocatalog",
+            ".dvdmedia",
+            # Document packages
+            ".pages", ".numbers", ".key", ".scriv",
+            # Installers, plug-ins and other code bundles
+            ".pkg", ".mpkg", ".component", ".vst", ".vst3", ".aaxplugin",
+            ".appex", ".xpc", ".systemextension", ".qlgenerator", ".mdimporter",
+            ".prefpane", ".saver", ".wdgt", ".workflow", ".action",
+            ".xcarchive", ".dsym", ".xctest", ".docarchive", ".playground",
+            ".mlmodelc",
         )
 
         # Folders whose contents another system deletes on its own: the
@@ -886,6 +907,17 @@ class OrganizerAPI:
 
             # Never reach inside an intact code repository and delete internal files
             if root != folder_abs and categorizer.is_project_root(root, items_set):
+                dirs.clear()
+                continue
+
+            # A folder laid out as a macOS bundle is a package whatever its
+            # extension (plug-ins and apps use many), so it is skipped like
+            # the ones in PACKAGE_BUNDLE_EXTS (audit P2-09).
+            if (
+                root != folder_abs
+                and "Contents" in items_set
+                and os.path.isfile(os.path.join(root, "Contents", "Info.plist"))
+            ):
                 dirs.clear()
                 continue
 

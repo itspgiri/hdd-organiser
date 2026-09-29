@@ -890,3 +890,70 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_endpoint_does_not_report_success_when_files_are_left`
   - `test_trash_that_empties_completely_still_reports_success` (control,
     passes before and after)
+
+#### P2-09 (Medium): files inside many kinds of package are offered for deletion
+
+- **Location:** `src/api_organizer.py`, `OrganizerAPI.find_duplicates_inplace`
+  (`PACKAGE_BUNDLE_EXTS` and the folder pruning).
+- **What happens:** the scan means to skip macOS packages, the folders the
+  Finder shows as a single document, because deleting one file inside breaks
+  the whole thing. It recognised them only by a short list of extensions:
+  apps, Photos, iPhoto and Aperture libraries, Final Cut, Logic, GarageBand,
+  Xcode projects, RTFD, frameworks and a few more. Not in the list:
+  - VMware Fusion, Parallels and UTM virtual machines (`.vmwarevm`, `.pvm`,
+    `.utm`) and sparse bundles (`.sparsebundle`, `.backupbundle`);
+  - Scrivener projects (`.scriv`), and Pages, Numbers and Keynote documents
+    saved as packages;
+  - Lightroom and Capture One libraries (`.lrlibrary`, `.lrdata`,
+    `.cocatalog`) and migrated iPhoto libraries (`.migratedphotolibrary`);
+  - audio plug-ins, installer packages and other code bundles.
+
+  Their internal files were grouped with other copies like any file, and
+  "Delete all redundant" deleted whichever copy the keep heuristic ranked
+  lower. That is usually the one inside the package, because it is deeper.
+  Two examples:
+  - A Pages document or a Lightroom library whose image also exists as a
+    loose file loses its copy of the image.
+  - The extents of a split VMware disk (`Virtual Disk-s001.vmdk`, `-s002`,
+    …) that cover never-written parts of the disk can be byte-identical. All
+    but one are deleted, and the virtual machine no longer opens.
+
+  The kept copy is byte-identical, so the data could be put back, but only
+  by someone who knows which names were deleted.
+- **Steps to reproduce:** in the scanned folder, create
+  `VMs/Windows 11.vmwarevm/` containing four identical files, `Virtual
+  Disk-s002.vmdk` to `Virtual Disk-s005.vmdk`. Scan and delete all redundant
+  copies. Three of the four are deleted.
+- **Fix:**
+  - The extension list now includes the package types above (the full list
+    is in the code).
+  - A folder laid out as a macOS bundle (`Contents/Info.plist`) is skipped
+    whatever its extension, which covers plug-ins and apps with unusual
+    extensions. The check costs one extra lookup, and only for folders that
+    have a `Contents` subfolder.
+  - As before, the scanned folder itself is never skipped: pointing the
+    utility at a package is a deliberate choice.
+  - `.hdd` (a Parallels disk) was left out on purpose. Parallels disks live
+    inside `.pvm`, which is listed, and "Old Drive.hdd" is a plausible name
+    for an ordinary backup folder, which would then be skipped without
+    notice.
+- **Behaviour change:** files inside these packages are no longer offered,
+  so a duplicate copy of a whole virtual machine or library is not found
+  either. Finding duplicate packages as whole units is left as a
+  recommendation.
+- **Not fixed:** folders that are not packages but whose files still belong
+  together. Virtual machines made on Windows or Linux are plain folders
+  (with a `.vmx` or `.vbox` file) and have the same split-extent risk. Code
+  projects with none of the configured markers, and media that a catalog
+  refers to by path, are also exposed. These need the owner's decision; see
+  the recommendations.
+- **Status:** Fixed. Tests in `tests/test_pass2_package_skips.py` (the first
+  three fail on `92ed5c1`):
+  - `test_files_inside_packages_are_not_offered` (one subtest per package
+    type added)
+  - `test_split_vmware_disk_keeps_all_its_extents`
+  - `test_unlisted_bundle_is_recognised_by_its_layout`
+  - `test_ordinary_folders_are_still_scanned` (control, passes before and
+    after)
+  - `test_scanning_a_package_directly_still_looks_inside` (control, passes
+    before and after)
