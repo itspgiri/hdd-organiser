@@ -127,6 +127,11 @@ def compute_relative_destination(categorizer, dates, file_path: str,
 
 
 class OrganizerAPI:
+    # Serialises the duplicates utility's removals (quarantine, permanent
+    # delete, emptying .Duplicates_Trash) across every instance; see
+    # trash_inplace_duplicates (audit P2-04).
+    _dup_removal_lock = threading.Lock()
+
     def __init__(
         self,
         config_path: str,
@@ -1003,6 +1008,24 @@ class OrganizerAPI:
           before removal so the user can NEVER delete all copies of a file.
         Returns (removed_count, refused_list, bytes_reclaimed).
         """
+        # The app builds a new OrganizerAPI per request and Flask serves
+        # requests in parallel. Two requests keeping different copies of the
+        # same file could both pass the "surviving twin exists" check before
+        # either removed anything, and together remove every copy (audit
+        # P2-04). Removals therefore run one at a time, process-wide.
+        with OrganizerAPI._dup_removal_lock:
+            return self._trash_inplace_duplicates_locked(
+                source_paths, root_folder, permanent_delete, groups
+            )
+
+    def _trash_inplace_duplicates_locked(
+        self,
+        source_paths: list,
+        root_folder: str,
+        permanent_delete: bool,
+        groups: Optional[List[dict]],
+    ) -> Tuple[int, list, int]:
+        """trash_inplace_duplicates' body; the caller holds _dup_removal_lock."""
         import os
         import errno
         import shutil
@@ -1126,6 +1149,11 @@ class OrganizerAPI:
 
     def empty_duplicates_trash(self, root_folder: str) -> Tuple[int, int, str]:
         """Permanently deletes root_folder/.Duplicates_Trash to reclaim disk space."""
+        with OrganizerAPI._dup_removal_lock:
+            return self._empty_duplicates_trash_locked(root_folder)
+
+    def _empty_duplicates_trash_locked(self, root_folder: str) -> Tuple[int, int, str]:
+        """empty_duplicates_trash's body; the caller holds _dup_removal_lock."""
         import os
         import shutil
         from .file_ops import _clear_immutable

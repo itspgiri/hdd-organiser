@@ -714,3 +714,30 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_other_self_emptying_folders_are_skipped`
   - `test_duplicates_in_ordinary_folders_are_still_found` (control, passes
     before and after)
+
+#### P2-04 (Medium): two removal requests at the same time can delete every copy
+
+- **Location:** `src/api_organizer.py`, `OrganizerAPI.trash_inplace_duplicates`
+  and `empty_duplicates_trash`, reached from `/api/dup_trash_inplace` and
+  `/api/dup_empty_trash`.
+- **What happens:** the app builds a new `OrganizerAPI` for every request,
+  and Flask serves requests in parallel. Each removal checks that the copy it
+  keeps still exists and matches, then removes its own selection. Nothing
+  stopped two requests from interleaving: one request removing `b` (keeping
+  `a`) and another removing `a` (keeping `b`) could both pass their checks
+  before either removed anything, and together they removed both copies. The
+  UI disables its buttons while a request runs, so normal use does not send
+  two such requests; a stuck request plus a page reload, or a second client,
+  can. The brief requires the backend to be safe whatever the UI sends, so
+  this breaks G4.
+- **Steps to reproduce:** scan a folder with one pair of duplicates. Send two
+  `/api/dup_trash_inplace` requests at the same time, one selecting each
+  copy. The test holds each request just before it deletes, until both have
+  passed their checks, which makes the interleaving deterministic. Both
+  copies are deleted.
+- **Fix:** a process-wide lock (`OrganizerAPI._dup_removal_lock`) makes
+  quarantine, permanent delete and emptying the trash run one at a time. The
+  second request then sees that the copy it meant to keep is gone and
+  refuses.
+- **Status:** Fixed. Test in `tests/test_pass2_concurrent_removal.py` (fails
+  on `92ed5c1`): `test_concurrent_requests_cannot_remove_every_copy`.
