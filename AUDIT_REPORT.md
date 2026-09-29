@@ -10,7 +10,7 @@ A separate reviewer checks all passes at the end.
 | 1 | Data safety in the organize flow's backend | Complete |
 | 2 | Duplicates utility | Complete |
 | 3 | Web UI | Complete |
-| 4 | CLI and local API | Not started |
+| 4 | CLI and local API | Complete |
 
 ---
 
@@ -1870,3 +1870,387 @@ includes a project named `Bob's "best" <app> & co` (P3-02).
 
 ---
 
+## Pass 4: CLI and local API
+
+### Scope
+
+In scope:
+1. **CLI entrypoints (`main.py`, `src/cli.py`):** argument parsing, interactive
+   prompts, path validation (`OrganizerAPI.validate_paths`), pre-flight repair
+   (`repair_transfer(dest_abs, deep=False)`), preview vs. copy parity with
+   `OrganizerAPI.run`, vanished/unreadable file handling, code project copy
+   failure tracking, completion reporting, `run_history.json` persistence, and
+   archive staging cleanup (`scanner.cleanup_staging()`).
+2. **Local Flask API (`src/app.py`):** per-launch token enforcement
+   (`require_token` / `API_TOKEN`), JSON/query parameter validation across all
+   18 `/api/*` routes, subprocess invocations (`osascript`, `open`, `diskutil`),
+   concurrency locking (`state_lock`), idle/terminal cancellation guards
+   (`/api/cancel`, `/api/dup_scan_cancel`), and the deferred items from Passes
+   1–3 (`/api/dup_reveal`, `/api/dup_empty_trash`, `/api/dup_scan_start`,
+   `/api/open_finder`, `/api/list_volumes`).
+3. **Cross-cutting scanner follow-ups from Pass 2 (`src/scanner.py`,
+   `src/api_organizer.py`):** OS trash and system directories in the organize
+   flow (`$RECYCLE.BIN`, `.Trash-<uid>`, `System Volume Information`, etc.) and
+   macOS package bundles (`.app`, `.photoslibrary`, `.vmwarevm`, `.pages`,
+   `.scriv`, etc.) in `Scanner.scan_directory`.
+
+### Method
+
+- Audited `main.py`, `src/cli.py`, `src/app.py`, `src/scanner.py`, and the
+  corresponding helpers in `src/api_organizer.py`.
+- Every confirmed bug fix was committed in its own atomic commit on
+  `audit/full-app-audit-2026-09` together with a dedicated `tests/test_pass4_*.py`
+  file whose tests fail against `main` (`92ed5c1`) and pass with the fix.
+- All subprocess calls (`open`, `osascript`, `afplay`, `caffeinate`) are mocked
+  in unit tests so no real Finder windows, AppleScript dialogs, or audio play
+  during test runs, and all filesystem operations stay inside
+  `tempfile.TemporaryDirectory()`.
+
+### Findings
+
+Same severity scale as Passes 1–3: **Critical** means data loss is likely in
+normal use. **High** means data loss, or a broken guarantee, in a plausible
+scenario. **Medium** means misleading results that could lead the owner to
+delete data. **Low** means a narrow edge case or defence-in-depth.
+
+#### P4-01 (High): CLI silently drops vanished/unreadable files and reports `"All done! 100% of files organized safely."` when files or code projects fail
+
+- **Location:** `src/cli.py`, lines 239–349 (`main`).
+- **What happens:** Pass 1 (`P1-02`, `2948be3`) and Pass 3 (`P3-05`, `cf394c4`)
+  fixed `OrganizerAPI.run` and the web UI so that:
+  1. a source file that vanishes or becomes unreadable between `scan_directory`
+     and the transfer loop's `os.path.getsize` / `os.path.getmtime` call logs a
+     warning, records `status="failed: disappeared or unreadable after the scan"`
+     in `.organizer_checkpoint.db` (so `verify_transfer` flags it as missing),
+     and increments `failed_files`; and
+  2. failed files and failed code projects suppress `scanner.cleanup_staging()`,
+     record `status: "Completed with errors"` (with `failed_files` and
+     `failed_projects`) in `run_history.json`, and warn the user instead of
+     claiming 100% completion.
+  `src/cli.py` had its own copy of the transfer loop and was not updated in
+  either pass:
+  - At lines 253–257, `except OSError: continue` silently skipped any file that
+    disappeared or became unreadable after scanning without logging, without
+    recording a failed row in `.organizer_checkpoint.db`, and without
+    incrementing a failure counter.
+  - At lines 239–245, `copy_project_intact` returning `False` printed an error
+    line, but `failed_projects` was never counted.
+  - At lines 273–291, `copy_file_Safely` returning `False` or raising an
+    exception left `failed_files` uncounted.
+  - At lines 296–348, `scanner.cleanup_staging()` ran unconditionally even when
+    files inside an extracted archive failed to copy, `run_history.json`
+    always recorded `"status": "Completed"` with no failure counts, and the CLI
+    always printed `"All done! 100% of files organized safely."` — violating
+    **G1** if the owner then wiped the source drive trusting the CLI summary.
+- **Steps to reproduce:** run `main.py --cli <src> <dst> --copy` where one file
+  is unlinked after scanning (or where `copy_file_Safely` or
+  `copy_project_intact` returns `False`). Observe that the CLI prints
+  `"All done! 100% of files organized safely."` and writes
+  `"status": "Completed"` to `run_history.json`.
+- **Fix:** track `failed_files` and `failed_projects` in `src/cli.py`; when
+  `os.path.getsize` / `os.path.getmtime` raises `OSError`, print a warning,
+  record `status="failed: disappeared or unreadable after the scan"` via
+  `engine.record_copy`, and increment `failed_files`; only call
+  `scanner.cleanup_staging()` when `failed_files == 0 and failed_projects == 0`;
+  record `"Completed with errors"`, `failed_files`, and `failed_projects` in
+  `run_history.json`; and print an explicit failure warning instead of
+  `"All done! 100% of files organized safely."` whenever any file or project
+  fails.
+- **Status:** Fixed in `67a5016`. Tests in
+  `tests/test_pass4_cli_completion_report.py` (4 tests).
+
+#### P4-02 (Medium): CLI resolves a whitespace-only destination (`"   "`) to `os.getcwd()` before `validate_paths` and leaks archive staging when an archive has no transferable files
+
+- **Location:** `src/cli.py`, lines 66–99 and 159–162 (`main`).
+- **What happens:**
+  1. When `main.py --cli <src> "   "` is invoked with a whitespace-only
+     destination argument, `args.dest.strip()` produces `""`, and line 87
+     (`dest_abs = os.path.abspath(os.path.expanduser(dest_raw))`) calls
+     `os.path.abspath("")`, which silently resolves to `os.getcwd()`! That
+     resolved path is then passed to `OrganizerAPI.validate_paths(source_abs, dest_abs)`,
+     which sees a non-empty directory path (`os.getcwd()`) and allows the CLI
+     to organize files directly into the current working directory.
+  2. When `""` is explicitly passed on the CLI (`main.py --cli "" <dst>`),
+     `if not source_raw:` was truthy and fell through to
+     `_macos_choose_folder(...)`, popping up a GUI AppleScript folder picker
+     during non-interactive CLI runs instead of rejecting the empty argument.
+  3. When a source folder contains only a Google Drive/Takeout zip whose
+     members are all skipped (or empty), `extract_gdrive_zip` creates a staging
+     folder in `dest_abs/.organizer_staging`, and lines 159–161 (`if total_files == 0 and total_projects == 0: return`)
+     returned early without calling `scanner.cleanup_staging()`.
+- **Steps to reproduce:** run `src/cli.py` with `sys.argv = ["main.py", "--cli", src, "   ", "--preview"]`
+  and observe that `dest_abs` becomes `os.getcwd()` instead of failing validation.
+- **Fix:** only invoke `_macos_choose_folder` when `args.source is None` /
+  `args.dest is None`; reject empty/whitespace-only `source_raw` or `dest_raw`
+  before calling `os.path.abspath`; and call `scanner.cleanup_staging()` before
+  returning on an empty scan.
+- **Status:** Fixed in `ef2a486`. Tests in
+  `tests/test_pass4_cli_dest_validation.py` (3 tests).
+
+#### P4-03 (High): `Scanner.scan_directory` and `Scanner.extract_gdrive_zip` walk into Windows/Linux/macOS trash and system folders (`$RECYCLE.BIN`, `.Trash-1000`, `System Volume Information`, etc.)
+
+- **Location:** `src/scanner.py` (`SKIP_OS_DIRS`, `scan_directory`,
+  `extract_gdrive_zip`, `_should_skip_zip_member_path`), `src/app.py`
+  (`inspect_folder`), and `src/api_organizer.py` (`list_code_projects`,
+  `dissolve_and_resort_project`).
+- **What happens:** Pass 2 (`P2-03`, `012e9d3`) taught
+  `OrganizerAPI.find_duplicates_inplace` to skip `$RECYCLE.BIN`, `RECYCLER`,
+  `Recycled`, `System Volume Information`, `.Trash-<uid>`,
+  `.DocumentRevisions-V100`, `.TemporaryItems`, `.MobileBackups`,
+  `Backups.backupdb`, `.dropbox.cache`, and `.stversions` (case-insensitively).
+  However, `SKIP_OS_DIRS` in `src/scanner.py` still had only five case-sensitive
+  names (`.Trash`, `.Trashes`, `.thumbnails`, `.fseventsd`, `.Spotlight-V100`).
+  On a drive used with Windows or Linux (or containing macOS version/backup
+  stores):
+  1. `Scanner.scan_directory` walked into `$RECYCLE.BIN` and `.Trash-1000` and
+     copied deleted trash files into the organized destination.
+  2. Worse, because `os.walk` visits `$RECYCLE.BIN` before `Photos/` or
+     `Documents/` (`$` sorts before ASCII letters), a deleted duplicate inside
+     `$RECYCLE.BIN/S-1-5-21-1000/$R3XK2P1.jpg` was copied to the destination
+     first (under its mangled `$R3XK2P1.jpg` recycle-bin name), and the live
+     file `Photos/IMG_1234.jpg` was then skipped as `DUPLICATE_SKIPPED` and
+     recorded in `.organizer_checkpoint.db` — where `/api/duplicates` and
+     `/api/trash_duplicates` offered the live `Photos/IMG_1234.jpg` for
+     quarantine/deletion on the source drive!
+- **Steps to reproduce:** create a source folder with identical payloads at
+  `$RECYCLE.BIN/S-1-5-21-1000/$R3XK2P1.txt` and `Photos/family_note.txt`, run
+  `OrganizerAPI.run(src, dst, is_preview=False, dest_mode="new")`, and call
+  `api.get_duplicate_records(dst)`. On `92ed5c1`, `$R3XK2P1.txt` is copied to
+  `dst/Documents/Text/$R3XK2P1.txt` and `Photos/family_note.txt` is returned as
+  a duplicate to trash.
+- **Fix:** expand `SKIP_OS_DIRS` in `src/scanner.py` to include all OS trash,
+  volume metadata, and sync-tool scratch/version directories, add
+  `is_skipped_system_dir(dirname)` (matching `SKIP_OS_DIRS` and
+  `SKIP_ORGANIZER_DIRS` case-insensitively plus `.trash-*` prefixes), and use
+  `is_skipped_system_dir` across `Scanner.scan_directory`,
+  `Scanner.extract_gdrive_zip`, `Scanner._should_skip_zip_member_path`,
+  `src/app.py:inspect_folder`, and `src/api_organizer.py`
+  (`list_code_projects`, `dissolve_and_resort_project`).
+- **Status:** Fixed in `ba8a26f`. Tests in
+  `tests/test_pass4_scanner_os_trash.py` (3 tests).
+
+#### P4-04 (Low): `/api/dup_reveal` reveals arbitrary paths outside `state.dup_root` and passes `path` to `open -R` without `--`
+
+- **Location:** `src/app.py`, `dup_reveal` (lines 597–608 on `656576c`).
+- **What happens:** `/api/dup_reveal` checked only `if not path or not os.path.exists(path):`
+  and ran `subprocess.Popen(["open", "-R", path])`:
+  1. Unlike `/api/dup_trash_inplace`, it did not check that `state.dup_root` was
+     set or that the resolved path lay inside `state.dup_root`, allowing any
+     caller with the token (including CDN scripts running in the page context)
+     to probe whether arbitrary paths exist on the host (200 vs. 404) and pop
+     up Finder windows outside the scanned folder.
+  2. Unlike `/api/open_finder` (`['open', '--', folder_real]`), it omitted `--`
+     and did not normalize `path` to an absolute real path, so a relative path
+     starting with `-` in the working directory would be parsed as a flag by
+     `open`.
+- **Steps to reproduce:** `POST /api/dup_reveal` with `{"path": "/etc/hosts"}`
+  when `state.dup_root` is empty or points to another directory; on `92ed5c1`
+  it spawns `open -R /etc/hosts` and returns 200.
+- **Fix:** normalize `path` via `_norm_folder(path.strip())`, require
+  `state.dup_root` to be set and `path_real` to be strictly inside
+  `state.dup_root` (returning HTTP 403 otherwise), verify
+  `os.path.exists(path_real)`, and invoke
+  `subprocess.Popen(["open", "-R", "--", path_real])`.
+- **Status:** Fixed in `2568897`. Tests in
+  `tests/test_pass4_dup_reveal_safety.py` (3 tests).
+
+#### P4-05 (Low): `/api/cancel` and `/api/dup_scan_cancel` mutate state and append cancellation logs when no operation is active
+
+- **Location:** `src/app.py`, `cancel_operation` and `dup_scan_cancel`.
+- **What happens:**
+  1. When `state.status` is `"idle"`, `"complete"`, `"error"`, or
+     `"cancelled"`, calling `POST /api/cancel` unconditionally overwrote
+     `state.message = "Cancelling... finishing the file currently in flight."`
+     and appended `"⛔ Cancellation requested. Finishing the current file, then stopping."`
+     to `state.logs`. If a transfer completed just before `/api/cancel` arrived,
+     the completion message in `/api/status` was overwritten with the
+     cancellation message.
+  2. Similarly, `POST /api/dup_scan_cancel` unconditionally set
+     `active_dup_scanner_cancelled = True` even when `state.dup_status` was
+     `"idle"` or `"complete"`.
+- **Steps to reproduce:** with `state.status = "complete"` and
+  `state.message = "All done! 100% of files organized safely."`, send
+  `POST /api/cancel` and inspect `state.message` and `state.logs`.
+- **Fix:** in `cancel_operation`, only cancel `active_api_instance`, transition
+  `"running"` -> `"cancelling"`, update `state.message`, and emit the
+  cancellation log when `state.status in ("running", "cancelling")`. In
+  `dup_scan_cancel`, only set `active_dup_scanner_cancelled = True` and
+  transition `"running"` -> `"cancelling"` when
+  `state.dup_status in ("running", "cancelling")`.
+- **Status:** Fixed in `3700ead`. Tests in
+  `tests/test_pass4_cancel_when_idle.py` (4 tests).
+
+#### P4-06 (Medium): `/api/dup_scan_start` can permanently wedge `state.dup_status = "running"` on non-string `folder` inputs and accepts regular files; `/api/dup_empty_trash` lacks a concurrency guard
+
+- **Location:** `src/app.py`, `dup_scan_start` and `dup_empty_trash`.
+- **What happens:**
+  1. In `/api/dup_scan_start`, validation was `if not folder or not os.path.exists(folder):`.
+     In Python, `os.path.exists(1)` is `True` because `os.stat(1)` stats file
+     descriptor 1 (`stdout`). When `{"folder": 1}` is posted, `dup_scan_start`
+     enters `with state_lock:`, sets `state.dup_status = "running"`, and then
+     calls `_norm_folder(1)`, which raises `TypeError` inside the `with` block
+     before the worker thread is ever created — leaving `state.dup_status`
+     permanently wedged at `"running"` (`"Scan already running"`) for the
+     lifetime of the server process. Passing a regular file path also passed
+     `os.path.exists(folder)` and launched a scan thread on a file.
+  2. Unlike `/api/trash_duplicates`, `/api/restore_duplicates`, and
+     `/api/dup_trash_inplace` (all of which return HTTP 409 while an operation
+     is active), `/api/dup_empty_trash` had no check on `state.status` or
+     `state.dup_status`, allowing `.Duplicates_Trash` to be deleted while an
+     organize transfer or duplicate scan was actively running or cancelling. It
+     also checked `os.path.exists(root_folder)` instead of verifying that
+     `root_folder` is a directory string.
+- **Steps to reproduce:** `POST /api/dup_scan_start` with `{"folder": 1}`; it
+  returns HTTP 500 and every subsequent `POST /api/dup_scan_start` with a valid
+  folder fails with `"Scan already running"`.
+- **Fix:** validate `isinstance(raw_folder, str)` and `os.path.isdir(folder)`
+  before acquiring `state_lock` in `dup_scan_start`; in `dup_empty_trash`,
+  return HTTP 409 when `state.status in ("running", "cancelling")` or
+  `state.dup_status in ("running", "cancelling")`, and validate that
+  `root_folder` is an existing directory string.
+- **Status:** Fixed in `ee447ee`. Tests in
+  `tests/test_pass4_dup_endpoints_state_and_path.py` (4 tests).
+
+#### P4-07 (Low): Flask routes return HTTP 500 on non-dict JSON bodies, non-string path fields, non-ASCII auth tokens, and open `os.getcwd()` on whitespace-only `/api/open_finder` paths
+
+- **Location:** `src/app.py`, `require_token`, `_json_dict`, `start`,
+  `dissolve_project`, `trash_duplicates`, `restore_duplicates`,
+  `repair_transfer`, `dup_trash_inplace`, and `open_finder`.
+- **What happens:**
+  1. `require_token` passed `supplied` directly to
+     `secrets.compare_digest(supplied, API_TOKEN)`, which raises
+     `TypeError: comparing strings with non-ASCII characters is not supported`
+     (HTTP 500 instead of 403) when `X-Organizer-Token` or `?token=` contains
+     non-ASCII characters.
+  2. All 9 JSON `POST` routes used `data = request.get_json(silent=True) or {}`.
+     When a client sends a valid JSON array, string, or number (`[]`, `"x"`,
+     `42`), `request.get_json(silent=True)` returns that truthy non-dict value
+     and `data.get(...)` raises `AttributeError` (HTTP 500).
+  3. Non-string path values in JSON bodies (e.g. integers or lists in `dest`,
+     `project_path`, `root_folder`, or elements of `source_paths`) raised
+     unhandled `TypeError` (HTTP 500) in `os.path.join` / `os.path.expanduser`.
+  4. `GET /api/open_finder?path=%20%20%20` passed `if not folder:`, stripped
+     `folder` to `""`, resolved `os.path.realpath("")` to `os.getcwd()`, passed
+     `os.path.isdir(folder_real)`, and opened the server's current working
+     directory in Finder instead of returning HTTP 400.
+- **Steps to reproduce:** send `GET /api/status?token=%C3%A9`,
+  `POST /api/start` with `json=[1, 2]`, or
+  `GET /api/open_finder?path=%20%20%20`.
+- **Fix:** guard `secrets.compare_digest` with `isinstance(supplied, str) and supplied.isascii()`;
+  parse request bodies via `_json_dict()`; validate string/list types on path
+  parameters; and reject whitespace-only `path` in `/api/open_finder` before
+  `os.path.realpath`.
+- **Status:** Fixed in `7ffdf37`. Tests in
+  `tests/test_pass4_api_input_validation.py` (4 tests).
+
+#### P4-08 (High): `Scanner.scan_directory` walks inside macOS package bundles (`.app`, `.photoslibrary`, `.vmwarevm`, `.pages`, `.scriv`, etc.) and scatters or deduplicates their internal files
+
+- **Location:** `src/scanner.py`, `Scanner.scan_directory` (lines 499–592).
+- **What happens:** Pass 2 (`P2-09`, `dcacdf5`) taught
+  `OrganizerAPI.find_duplicates_inplace` to skip macOS package bundles
+  (`PACKAGE_BUNDLE_EXTS` and any directory containing `Contents/Info.plist`),
+  because a package/bundle is presented to the user in Finder as a single file
+  whose internal directory structure must stay intact.
+  `Scanner.scan_directory` in `src/scanner.py` has no notion of package bundles
+  at all (unless a bundle happens to match `Categorizer.is_project_root`, such
+  as an `.xcodeproj`). When organizing a folder that contains:
+  - an application (`MyApp.app`),
+  - an Apple Photos library (`Vacation.photoslibrary`),
+  - a virtual machine (`Win11.vmwarevm`, `.pvm`, `.utm`),
+  - an iWork or Scrivener package-format document (`Report.pages`,
+    `Budget.numbers`, `Deck.key`, `Novel.scriv`), or
+  - a Logic/Final Cut/GarageBand project (`.logicx`, `.fcpbundle`, `.band`),
+  `Scanner.scan_directory` walks inside the bundle and treats every internal
+  resource file (`Info.plist`, `Document.iwa`, `Metadata/Properties.plist`,
+  `content.rtf`, `.vmdk` split disk extents, `database/Photos.sqlite`,
+  `originals/0/0A1B-...jpeg`) as an independent loose file:
+  1. In the destination, the bundle is **destroyed**: its internal plist,
+     database, preview, and media files are scattered across `Documents/`,
+     `Media/`, `Code/`, and `Unsorted/`, so the application, library, virtual
+     machine, or `.pages`/`.scriv` document can no longer be opened at the
+     destination.
+  2. Any two identical internal files inside the bundle (such as empty
+     `.vmwarevm` split-disk extents, repeated blank `.sparsebundle` bands, or
+     identical template icons/plists across bundles) cause the second file to
+     be skipped as `DUPLICATE_SKIPPED` and recorded in
+     `.organizer_checkpoint.db`. If the user then clicks "Move All to Trash" in
+     the organize flow's Duplicates tab (`/api/trash_duplicates`), those
+     internal files are moved out of the bundle **on the source drive** into
+     `<bundle>/.../.Duplicates_Trash`, corrupting the source bundle too!
+- **Why this was not changed in code (owner decision required):**
+  - Simply pruning `PACKAGE_BUNDLE_EXTS` in `Scanner.scan_directory` (the way
+    `find_duplicates_inplace` does) would silently leave `.pages`/`.numbers`/`.key`
+    package documents, `.scriv` projects, `.photoslibrary` libraries, and
+    `.vmwarevm` virtual machines uncopied while reporting `"100% of files organized safely"`,
+    which would cause catastrophic data loss (**G1**) if the owner wipes the
+    source drive after organizing.
+  - Treating bundles like `projects_found` (`copy_project_intact`) without
+    dedicated bundle handling would (a) apply `PROJECT_IGNORE_PATTERNS`
+    (stripping internal `build`, `dist`, `target`, or `.tmp` directories inside
+    an `.app` or bundle), (b) place `.photoslibrary` / `.pages` / `.vmwarevm`
+    under `Code/`, and (c) bypass `verify_transfer` (which only checks the
+    `copies` table in `.organizer_checkpoint.db`, not intact directory copies).
+  - For `.photoslibrary` specifically, the owner must also decide whether
+    organizing a drive should copy the `.photoslibrary` bundle intact as a
+    single unit or extract `originals/` (or `Masters/`) into `Media/<Year>/<Month>/`
+    while skipping `resources/derivatives/` thumbnails and SQLite databases.
+- **Status:** Not fixed: owner decision. Documented for the owner and final
+  review.
+
+### Notes on Other Local API Items from Passes 2 and 3
+
+- **Authentication (`require_token`):** Every `/api/*` route is gated by the
+  `@app.before_request` hook using `secrets.compare_digest(supplied, API_TOKEN)`
+  (32-byte URL-safe token generated per launch via `secrets.token_urlsafe(32)`).
+  Confirmed that unauthenticated requests and wrong/non-ASCII tokens receive
+  HTTP 403 on every `/api/*` endpoint. (As noted in Pass 3 Recommendation 1,
+  third-party CDN scripts loaded by `index.html` execute in the same origin and
+  have access to `window.ORGANIZER_API_TOKEN`; bundling those assets locally
+  remains an architectural recommendation.)
+- **`/api/dup_empty_trash` accepting any existing directory `root_folder`:** By
+  design (see Pass 2 `P2-06`), `/api/dup_empty_trash` can empty
+  `<root_folder>/.Duplicates_Trash` without requiring a fresh scan of
+  `root_folder`, and is confined to the literal `.Duplicates_Trash` child name
+  (refusing symlinks per `P2-07`). Pass 4 (`P4-06`) added concurrency guards so
+  it cannot run during an active transfer or duplicate scan, and validated that
+  `root_folder` is an existing directory string.
+- **`/api/open_finder`:** Requires the per-launch `API_TOKEN`, resolves
+  `os.path.realpath(os.path.expanduser(folder.strip()))`, verifies
+  `os.path.isdir(folder_real)`, and invokes `subprocess.run(['open', '--', folder_real], check=False)`
+  with no shell and `--` option termination. Pass 4 (`P4-07`) fixed the
+  whitespace-only query parameter case (`?path=%20%20`) so it no longer resolves
+  `""` to `os.getcwd()`.
+- **`/api/list_volumes`:** Read-only endpoint that lists `/Volumes` and runs
+  `subprocess.run(["diskutil", "list"], capture_output=True, text=True, timeout=5)`
+  with a fixed argument list and 5-second timeout. It is currently unused by
+  `src/static/script.js` (dead code), but poses no security or data-safety
+  risk behind `require_token`.
+
+### Summary
+
+| ID | Severity | Finding | Status | Commit | Tests in `tests/` |
+|----|----------|---------|--------|--------|-------------------|
+| P4-01 | High | CLI silently drops vanished/unreadable files and reports 100% success when files or code projects fail | Fixed | `67a5016` | `test_pass4_cli_completion_report.py` (4) |
+| P4-02 | Medium | CLI resolves whitespace-only destination (`"   "`) to `os.getcwd()` and leaks staging on empty archive scan | Fixed | `ef2a486` | `test_pass4_cli_dest_validation.py` (3) |
+| P4-03 | High | `Scanner.scan_directory` and `extract_gdrive_zip` walk into `$RECYCLE.BIN`, `.Trash-1000`, `System Volume Information`, etc. | Fixed | `ba8a26f` | `test_pass4_scanner_os_trash.py` (3) |
+| P4-04 | Low | `/api/dup_reveal` reveals paths outside `state.dup_root` and calls `open -R` without `--` | Fixed | `2568897` | `test_pass4_dup_reveal_safety.py` (3) |
+| P4-05 | Low | `/api/cancel` and `/api/dup_scan_cancel` mutate state/logs when no operation is active | Fixed | `3700ead` | `test_pass4_cancel_when_idle.py` (4) |
+| P4-06 | Medium | `/api/dup_scan_start` wedges `dup_status = "running"` on integer FD and accepts files; `/api/dup_empty_trash` lacks concurrency guard | Fixed | `ee447ee` | `test_pass4_dup_endpoints_state_and_path.py` (4) |
+| P4-07 | Low | Flask routes return HTTP 500 on non-dict JSON, non-string paths, or non-ASCII tokens, and `/api/open_finder` opens CWD on whitespace | Fixed | `7ffdf37` | `test_pass4_api_input_validation.py` (4) |
+| P4-08 | High | `Scanner.scan_directory` walks inside macOS package bundles (`.app`, `.photoslibrary`, `.vmwarevm`, `.pages`, `.scriv`) and scatters/deduplicates internal files | Not fixed: owner decision | Report only | None |
+
+`make test` went from 242 tests at `656576c` to 267 tests: 25 new tests across
+7 new `tests/test_pass4_*.py` files. All 25 new tests fail against `92ed5c1`
+and pass on `audit/full-app-audit-2026-09`.
+
+#### Running the new Pass 4 tests against `92ed5c1`
+
+```sh
+W=$(mktemp -d)/base-92ed5c1
+git worktree add --detach "$W" 92ed5c1
+for tf in tests/test_pass4_*.py; do
+  bname="$(basename "$tf" .py)"
+  .venv/bin/python3 -c "import sys,unittest; sys.path.insert(0,'$W'); suite=unittest.defaultTestLoader.loadTestsFromName('tests.$bname'); res=unittest.TextTestRunner(verbosity=1).run(suite); sys.exit(0 if not res.wasSuccessful() else 1)"
+done
+git worktree remove --force "$W"
+```
