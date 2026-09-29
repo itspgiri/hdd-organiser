@@ -8,7 +8,7 @@ A separate reviewer checks all passes at the end.
 | Pass | Scope | Status |
 |------|-------|--------|
 | 1 | Data safety in the organize flow's backend | Complete |
-| 2 | Duplicates utility | In progress |
+| 2 | Duplicates utility | Complete |
 | 3 | Web UI | Not started |
 | 4 | CLI and local API | Not started |
 
@@ -657,8 +657,8 @@ Commit hashes are listed in the summary table at the end of this section.
 - **Cost:** each removal now reads the selected file and the kept copy in
   full, as the scan already did. At the owner's scale (about 1 TB of
   duplicates) that adds hours to a delete on a USB hard drive. That is the
-  price of not deleting on a guess; faster options are in the
-  recommendations at the end of this section.
+  price of not deleting on a guess; faster options are under
+  "Recommendations" below.
 - **Status:** Fixed. Tests in `tests/test_pass2_verify_full_content.py` (the
   first three fail on `92ed5c1`):
   - `test_permanent_delete_keeps_copy_changed_after_scan`
@@ -803,8 +803,9 @@ Commit hashes are listed in the summary table at the end of this section.
      path field at the time of the click, for `.Duplicates_Trash`, without
      checking that the results were for that folder. Scan A, change the field
      to B, click Quarantine: A's duplicates were moved into
-     `B/.Duplicates_Trash`. If B is on another drive, `shutil.move` copies
-     each file across and deletes the original.
+     `B/.Duplicates_Trash`. If B was on another drive, `shutil.move` copied
+     each file across and deleted the original (since P2-11, quarantine
+     only renames, and refuses a file on another drive).
 
   Each group still keeps one copy, so G4 holds, but the owner acts on files
   they did not mean to touch.
@@ -947,8 +948,9 @@ Commit hashes are listed in the summary table at the end of this section.
   projects with none of the configured markers, and media that a catalog
   refers to by path, are also exposed. These need the owner's decision; see
   the recommendations.
-- **Status:** Fixed. Tests in `tests/test_pass2_package_skips.py` (the first
-  three fail on `92ed5c1`):
+- **Status:** Fixed for packages; folders that are not packages are not
+  fixed (owner decision). Tests in `tests/test_pass2_package_skips.py` (the
+  first three fail on `92ed5c1`):
   - `test_files_inside_packages_are_not_offered` (one subtest per package
     type added)
   - `test_split_vmware_disk_keeps_all_its_extents`
@@ -1037,3 +1039,213 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_file_in_read_only_folder_is_refused_without_a_copy_in_the_trash`
   - `test_ordinary_duplicate_is_still_quarantined` (control, passes before
     and after)
+
+### Recommendations
+
+These need the owner's decision, or go beyond fixing a defect. P2-02, P2-03
+and P2-09 point here; P2-10 and P2-11 carry their own recommendations.
+
+1. **Faster checks before removal (P2-02).** Each removal now reads the
+   selected file and the kept copy in full. Read the kept copy once per group
+   instead of once per removed file: hash it in full once, then compare each
+   selected copy's full hash with it. For groups with many copies that nearly
+   halves the reading. Anything that avoids reading the selected file, such
+   as trusting size and modification time, would reopen P2-02: VeraCrypt, for
+   one, keeps a changed container's modification time, and exFAT records no
+   separate change time to fall back on.
+2. **Keep heuristic (P2-03).** `_original_sort_key` counts a name ending in
+   `_<digits>`, `-<digits>` or ` <digits>` as a copy, and every camera name
+   (`IMG_1234`, `DSC_0001`) ends that way. Count such an ending as a copy
+   marker only when another file in the same group has the same name without
+   it (`IMG_1234 2.JPG` next to `IMG_1234.JPG`). Keep treating ` copy` and
+   `(1)` as copy markers.
+3. **Folders whose files belong together but are not packages (P2-09).**
+   - Virtual machines made on Windows or Linux are plain folders. Skip a
+     folder that holds a `.vmx` or `.vbox` file, as packages are skipped.
+   - Code projects are recognised only by the markers in `config.json`:
+     `.git`, `package.json`, `requirements.txt`, `Cargo.toml`, `go.mod`,
+     `pom.xml` and `build.gradle`. Projects with only `pyproject.toml`,
+     `setup.py`, `CMakeLists.txt`, `Package.swift`, a `.sln` or `.csproj`, or
+     `.hg` or `.svn`, and Xcode project folders without git, are scanned like
+     any folder. The list is shared with the organize flow, so extending it
+     changes that flow too.
+   - Media that a catalog refers to by path: Lightroom Classic catalogs
+     (`.lrcat`), Premiere Pro and DaVinci Resolve projects, Pro Tools and
+     Ableton Live sessions, the Music (iTunes) library. Deleting the copy a
+     catalog points to breaks the link, even though an identical copy
+     survives elsewhere. At least warn when a group has a copy in a folder
+     that also holds a catalog, or prefer keeping that copy.
+4. **Duplicate packages as whole units (P2-09).** Packages are skipped, so a
+   second copy of a whole virtual machine or photo library is not found,
+   although it may be the biggest saving on the drive. A separate check could
+   compare whole packages (or folders) file by file and offer the duplicate
+   as one item.
+5. **Metadata is not compared.** Files with the same bytes are duplicates
+   even if only one of them has Finder tags, a Finder comment, "Where from"
+   information, other extended attributes or a resource fork. Deleting that
+   copy loses them. Prefer keeping the copy with more metadata, or at least
+   show the difference.
+6. **Files already gone are not reported.** A selected file that no longer
+   exists when the removal runs is skipped silently: it is neither counted
+   nor listed. Nothing is lost, but the result does not add up to the
+   selection. List it as "already gone".
+7. **Cancelling can be slow.** The scan checks for cancellation between
+   files, not inside `files_are_identical`, which compares two files in
+   full. On a USB hard drive, comparing two large videos can take minutes,
+   and the cancel waits for it. P2-06 made that wait safe, but it is still
+   slow. Pass a cancel check into the comparison loop.
+
+### Summary
+
+| ID | Severity | Finding | Status | Commit | Tests in `tests/` |
+|----|----------|---------|--------|--------|-------------------|
+| P2-01 | High | The duplicate scan crashed on any folder with a subfolder | Fixed | `89c021a` | `test_pass2_scan_subfolders.py` (3) |
+| P2-02 | High | Delete and quarantine removed files that changed after the scan | Fixed | `6408d17` | `test_pass2_verify_full_content.py` (3, plus 1 control) |
+| P2-03 | High | The Windows or Linux trash copy was kept and the live file deleted | Fixed | `012e9d3` | `test_pass2_skip_os_trash.py` (3, plus 1 control) |
+| P2-04 | Low | Two removal requests at once could delete every copy | Fixed | `6307622` (rated Low in `459a306`) | `test_pass2_concurrent_removal.py` (1) |
+| P2-05 | Medium | "Freed X" counted file sizes, not the space freed | Fixed | `cce1c2e` | `test_pass2_reported_space.py` (2, plus 1 control) |
+| P2-06 | Medium | Results could belong to a different folder than the UI shows | Fixed | `755f5ff` | `test_pass2_scan_state.py` (2, plus 1 control) |
+| P2-07 | Low | Emptying a symlinked `.Duplicates_Trash` deleted what it pointed to | Fixed | `176ab24` | `test_pass2_symlinked_trash.py` (2, plus 1 control) |
+| P2-08 | Low | Emptying the trash reported success when files were left | Fixed | `2365371` | `test_pass2_empty_trash_leftovers.py` (2, plus 1 control) |
+| P2-09 | Medium | Files inside many kinds of package were offered for deletion | Fixed for packages; other folders not fixed: owner decision | `dcacdf5` | `test_pass2_package_skips.py` (3, plus 2 controls) |
+| P2-10 | Low | Quarantine records nothing; emptying the trash does not check the kept copies | Not fixed: owner decision | `ac7d803` (report only) | None |
+| P2-11 | Low | A refused quarantine left a copy in the trash; permanent delete removes locked files silently | Stray copy fixed; locked files not fixed: owner decision | `ac7d803` | `test_pass2_refused_quarantine.py` (2, plus 1 control) |
+
+Other pass-2 commits:
+- `89c021a` (P2-01) also started this section and added the shared fixtures
+  in `tests/pass2_helpers.py`.
+- `459a306` re-rated P2-04 from Medium to Low.
+- `e935431` added the guarantee tests for G4 to G6
+  (`test_pass2_guarantees.py`, 13 tests) and two fixture fixes in
+  `tests/pass2_helpers.py`.
+- The commit that adds this summary is the last pass-2 commit.
+
+`make test` went from 148 tests at `c8840b9` to 193: 45 new tests in 11 new
+test files, plus the shared `tests/pass2_helpers.py`. No existing test was
+changed. The source changes are all in `src/api_organizer.py` and
+`src/app.py`.
+
+Guarantees, with the fixes:
+- **G4** holds in every scenario tested: every copy selected (directly and
+  through the API), "delete all redundant", the kept copy deleted or
+  replaced after the scan, a selected copy that grew or was replaced by a
+  hard link to the kept copy, and stale paths or paths outside the scanned
+  folder. On `92ed5c1` it was broken by P2-02 (changed files) and P2-04
+  (concurrent requests), and in effect by P2-03. P2-10 is an open gap:
+  emptying the trash does not re-check the kept copies.
+- **G5** holds. An audit hook recorded no write calls under the scanned
+  folder during a scan, called directly or through the API, and on the full
+  volumes the scan changed neither the file tree nor the free space.
+- **G6** holds on real, completely full 48 MB exFAT and APFS images: the scan
+  completes, and both permanent delete and emptying the trash free the space
+  they report (to within 64 KB of file-system overhead). "Completely full"
+  means that a new 1-byte file cannot be created. exFAT then reports 0 bytes
+  free; a 32 MB APFS image still reported about 1.25 MB, a reserve APFS
+  keeps. Quarantine on a full drive is refused cleanly, because
+  `.Duplicates_Trash` cannot be created, and the message points to permanent
+  delete.
+
+#### Running the new tests against `92ed5c1`
+
+Run from the repository root with this branch checked out. Any empty scratch
+folder works for `W`.
+
+```sh
+W=$(mktemp -d)/base-92ed5c1
+git worktree add --detach "$W" 92ed5c1
+git archive audit/full-app-audit-2026-09 tests/pass2_helpers.py \
+  $(git ls-tree --name-only audit/full-app-audit-2026-09 tests/ | grep 'tests/test_pass2_') \
+  | tar -x -C "$W"
+.venv/bin/python3 -c "import os,sys,unittest; os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); unittest.main(module=None, argv=['unittest','discover','-s','tests','-p','test_pass2_*.py','-v'])" "$W"
+git worktree remove --force "$W"
+```
+
+Result on 2026-09-29: 45 tests, of which 26 fail, 2 error and 17 pass
+(unittest reports "failures=47" because it counts each failed subtest).
+- All 23 fix tests fail, each for the reason its finding describes. The 2
+  errors are P2-01's direct tests (`AttributeError`).
+- 5 of the 13 guarantee tests fail: the ones that go through the app's
+  endpoints (G4 through the API twice, G5 through the API, and the two
+  full-volume G6 tests). On `92ed5c1` the app's scan ends in "error" on any
+  folder with a subfolder (P2-01), so there are no results to act on.
+- The 17 that pass are expected to pass on both versions:
+  - the other 8 guarantee tests: G4 and G5 hold on `92ed5c1` in the
+    scenarios they cover when the scan is called directly, and the
+    violations are covered by the fix tests;
+  - 9 controls: one for each fixed finding except P2-01 and P2-04, and two
+    for P2-09.
+
+The run leaves no disk image attached (checked with `hdiutil info`).
+
+#### Not verified, or only partly verified
+
+- **Scale:** nothing was run at the owner's scale (2 TB, about 1 TB of
+  duplicates). P2-02's full comparison reads each removed file and its kept
+  copy again; on a USB hard drive that adds hours to a large delete. Not
+  measured.
+- **File systems:** exFAT was tested only on small images (16 to 48 MB),
+  with the exFAT driver of macOS 26.6.2, which runs in FSKit and mounts with
+  `noatime`. Earlier macOS versions use a different driver, and a 2 TB exFAT
+  volume has much larger clusters than these images. FAT32 and NTFS were not
+  tested. On exFAT, extended attributes live in `._` files; whether removing
+  or quarantining a duplicate also removes or moves its `._` file was not
+  checked.
+- **G5's audit hook** sees writes made through Python. Writes the OS makes on
+  its own, such as access times on a volume mounted without `noatime`, are
+  not seen. On the full volumes, the scan left the free space unchanged.
+- **P2-09:** that the unused extents of a split VMware disk are
+  byte-identical follows from the VMDK sparse-extent format; it was not
+  checked against a disk made by VMware. The package list covers common
+  types, not all, and the `Contents/Info.plist` check only catches app-style
+  bundles.
+- **P2-10, and the locked-file half of P2-11:** not fixed, so there are no
+  committed tests. Each was reproduced with a scratch script on synthetic
+  data; the steps are in each entry.
+- **Across processes:** the removal lock (P2-04) and the scan state (P2-06)
+  are per process. Two copies of the app running at once are not
+  serialized.
+- **Crashes:** a crash or power loss in the middle of a removal was not
+  simulated.
+- **"Reveal in Finder":** read, not tested. It runs `open -R` (no shell) on
+  any existing path it is given; see "For later passes".
+- **The UI:** not exercised. Only the requests the duplicates screen sends
+  were read (pass 3).
+
+### For later passes
+
+- **Organize flow (pass 1's area, for the final review):**
+  - P2-03 added the Windows and Linux trash and the other self-emptying
+    folders to the duplicates scan only. `SKIP_OS_DIRS` in `src/scanner.py`,
+    which the organize flow uses, still has only `.Trash`, `.Trashes`,
+    `.thumbnails`, `.fseventsd` and `.Spotlight-V100`, so organizing a drive
+    that has been used on Windows or Linux presumably treats `$RECYCLE.BIN`
+    and `.Trash-1000` as ordinary folders. Not verified.
+  - `src/scanner.py` has no notion of packages (nothing like
+    `PACKAGE_BUNDLE_EXTS`), so the organize flow may sort the files inside a
+    `.photoslibrary`, `.app` or `.vmwarevm` into categories, which would
+    break the package in the destination. Not verified.
+  - `_force_remove` in `src/file_ops.py`, which clears the Finder "Locked"
+    flag before deleting (P2-11), is used by the organize flow too.
+- **Pass 3 (web UI):**
+  - P2-06: removal now answers HTTP 409 when the path field no longer names
+    the scanned folder. Check that the UI shows the message, and consider
+    showing which folder the results belong to.
+  - P2-08: a partly failed "Empty .Duplicates_Trash" now returns
+    `success: false`. The UI's alert shows only `error`, which is why the
+    message includes the number deleted; the UI could also show
+    `bytes_freed`.
+  - P2-03 and P2-09: files in OS trash folders and inside packages are no
+    longer listed. The UI could say which kinds of folder are skipped, so
+    the owner knows why a big library's duplicates do not appear.
+- **Pass 4 (local API):**
+  - `/api/dup_reveal` passes any existing path to `open -R`. A relative path
+    that starts with `-` would be read by `open` as an option. That needs
+    such a file in the app's working folder, but passing
+    `os.path.abspath(path)` would rule it out. It also reveals any path, not
+    only scan results.
+  - `/api/dup_empty_trash` permanently deletes `<root_folder>/.Duplicates_Trash`
+    for any existing `root_folder` in the request (by design; see P2-06). It
+    only ever deletes a folder with that exact name. Check that only the app
+    can call it.
+
+---
