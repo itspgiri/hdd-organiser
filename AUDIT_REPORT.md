@@ -182,6 +182,55 @@ summary table at the end of this section.
   - `test_crash_during_project_copy_leaves_no_half_copied_project`
   - `test_leftover_staging_folder_is_not_offered_as_a_project`
 
+#### P1-04 (High): dissolving a code project permanently deletes `.git` history and some folders
+
+- **Location:** `src/api_organizer.py`, `dissolve_and_resort_project` (the
+  "dissolve" action offered for folders under `<dest>/Code`).
+- **What happens:** dissolving moves the project's files into the library
+  (Media, Documents, ...), then deletes the project folder with
+  `shutil.rmtree`. Both the move loop and the "is anything left?" check skip
+  the folders in `SKIP_SYSTEM_DIRS` and the "garbage" file names, so whatever
+  is inside them is never moved and never counted as left over, and `rmtree`
+  deletes it without a warning. The project copy (`copy_project_intact`)
+  does bring some of these along, so on a real destination this deletes:
+  - the whole `.git` folder (all commit history, stashes, unpushed branches);
+  - folders the owner happened to name `Caches` or `.tmp`, with everything in
+    them;
+  - `._*` (AppleDouble: resource forks and Finder metadata on exFAT drives)
+    and `~$*` files;
+  - any other skip-listed folder that is in the destination copy (for
+    example one copied by an older version or put there by the owner).
+
+  If the owner has wiped the source, which is the point of organizing, these
+  were the last copies.
+- **Steps to reproduce (confirmed on synthetic data):** source
+  `my_app/{.git/HEAD, .git/objects/ab/cdef0123, Caches/meeting-notes.txt,
+  main.py, ._main.py, ~$report.docx}`; organize into a new destination;
+  `Code/my_app` holds all six. Call
+  `dissolve_and_resort_project(dest, dest/Code/my_app)`: it returns
+  "Project dissolved and files re-sorted successfully!", `main.py` is now
+  `Code/Snippets/main.py`, and the other five files exist nowhere in the
+  destination.
+- **Not fixed, owner decision:** the existing test
+  `tests/test_full_audit_fixes.py::test_dissolve_project_skips_git_deletes_duplicates_and_persists_across_runs`
+  asserts that the dissolved folder, `.git` included, is gone, so deleting it
+  is the current intended design. Changing it changes behaviour.
+- **Recommendation:** never `rmtree` in this flow. Either move what is left
+  (the `.git` folder and the skipped folders) to the Trash or to an organizer
+  quarantine folder the owner can review, or keep it in `Code/<name>` and say
+  so in the result message. At minimum, treat `Caches` and `.tmp` as ordinary
+  folders here, and list what will be deleted before asking to confirm.
+- **Related, also not changed:**
+  - When `shutil.move` fails, the fallback is `safe_copy` then
+    `_force_remove(original)`. The copy is not compared with the original
+    before the original is deleted.
+  - The move onto the reserved name has the same check-then-rename window as
+    P1-10: `os.rename` silently replaces a file that appears at that name in
+    between.
+  - Files inside the project that are identical to a file already in the
+    library are deleted instead of moved. This is safe: `resolve_destination`
+    compares the two byte for byte first.
+
 #### P1-05 (Low): preview deletes an archive staging folder
 
 - **Location:** `src/scanner.py`, `Scanner.extract_gdrive_zip`, the `except`
