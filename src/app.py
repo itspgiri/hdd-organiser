@@ -596,12 +596,36 @@ def get_dup_scan_status():
 
 @app.route("/api/dup_reveal", methods=["POST"])
 def dup_reveal():
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
     path = data.get("path", "")
-    if not path or not os.path.exists(path):
+    if not isinstance(path, str) or not path.strip():
+        return jsonify({"success": False, "error": "File does not exist."}), 404
+    path_real = _norm_folder(path.strip())
+    with state_lock:
+        scan_root = state.dup_root
+    if not scan_root:
+        return jsonify({
+            "success": False,
+            "error": "Run a duplicate scan on this folder before revealing files.",
+        }), 403
+    try:
+        inside_scan_root = (
+            path_real != scan_root
+            and os.path.commonpath([scan_root, path_real]) == scan_root
+        )
+    except ValueError:
+        inside_scan_root = False
+    if not inside_scan_root:
+        return jsonify({
+            "success": False,
+            "error": "Refused: file is outside the scanned duplicate folder.",
+        }), 403
+    if not os.path.exists(path_real):
         return jsonify({"success": False, "error": "File does not exist."}), 404
     try:
-        subprocess.Popen(["open", "-R", path])
+        subprocess.Popen(["open", "-R", "--", path_real])
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
