@@ -422,7 +422,10 @@ class Scanner:
         except Exception:
             if counted_extraction and self.gdrive_zips_extracted > 0:
                 self.gdrive_zips_extracted -= 1
-            if staging_dir and os.path.exists(staging_dir):
+            # Preview writes nothing (audit pass 1, finding P1-05). This folder
+            # was not created by the preview; it may hold a resumable
+            # extraction left by a cancelled real run.
+            if not is_preview and staging_dir and os.path.exists(staging_dir):
                 shutil.rmtree(staging_dir, ignore_errors=True)
             extracted_files = []
             if not (cancel_check and cancel_check()):

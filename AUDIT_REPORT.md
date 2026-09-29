@@ -182,6 +182,30 @@ summary table at the end of this section.
   - `test_crash_during_project_copy_leaves_no_half_copied_project`
   - `test_leftover_staging_folder_is_not_offered_as_a_project`
 
+#### P1-05 (Low): preview deletes an archive staging folder
+
+- **Location:** `src/scanner.py`, `Scanner.extract_gdrive_zip`, the `except`
+  block.
+- **What happens:** a real transfer unpacks Google Drive / Takeout archives into
+  `<destination>/.organizer_staging/<archive>_<key>/` and keeps that folder
+  when the run is cancelled, so the next run can resume without unzipping
+  again. If preview then met the same archive and could not open it (for
+  example a truncated download, or an archive that changed since), the error
+  handler removed the staging folder with `rmtree`, even in preview. That
+  breaks "preview writes nothing". If the destination is on the source drive,
+  it is a write to the source drive (G2). The deleted data is only an
+  extracted copy of the archive, so the practical impact is small.
+- **Steps to reproduce:** start a real transfer of a source that contains
+  `takeout-20230101-001.zip` and cancel it after extraction; replace the zip
+  with a damaged one; run a preview into the same destination. The staging
+  folder is gone.
+- **Fix:** the error handler no longer removes the staging folder in preview.
+- **Status:** Fixed. Tests in `tests/test_pass1_preview_staging.py`:
+  - `test_preview_keeps_staging_folder_of_unreadable_archive` (fails on
+    `92ed5c1`)
+  - `test_preview_keeps_staging_folder_of_readable_archive` (guard; passes
+    before and after)
+
 #### P1-07 (High): parallel transfer workers crash the app with a segmentation fault
 
 - **Location:** `src/file_ops.py`, `FileEngine.is_already_copied`,
