@@ -1547,7 +1547,11 @@ class OrganizerAPI:
         So a file is only ever deleted when all of the following hold:
           1. exactly one DB row claims that path,
           2. no successfully-completed row claims that path,
-          3. the path really lives inside dest_abs.
+          3. the path really lives inside dest_abs,
+          4. the file is a cut-short (or complete) copy of its source, and the
+             source still exists (see _is_cut_short_copy). Otherwise the file
+             may be the last copy of its data (source gone, or edited after
+             organizing), so it is kept and only its record is cleared.
 
         `deep` controls content verification. When True every healthy row is
         re-hashed, which reads 1MB from the head and 1MB from the tail of every
@@ -1601,6 +1605,7 @@ class OrganizerAPI:
         purged_sources = []
         bad_dest_paths = set()
         deleted_count = 0
+        kept_paths = []
 
         try:
             for source_path, dest_path, size, part_hash, status, duplicate_of in rows:
@@ -1647,6 +1652,15 @@ class OrganizerAPI:
                     continue
                 if failed_row and dest_path in completed_paths:
                     continue
+                # ...and only when nothing is lost by deleting it: the file must
+                # be a cut-short (or complete) copy of a source file that still
+                # exists, so the next run can copy it again. A file that differs
+                # in any other way was edited after organizing, or its source is
+                # gone, and may be the only copy of that data. Keep it; its
+                # record is still cleared above.
+                if not self._is_cut_short_copy(dest_path, source_path):
+                    kept_paths.append(dest_path)
+                    continue
 
                 if _force_remove(dest_path):
                     deleted_count += 1
@@ -1676,8 +1690,37 @@ class OrganizerAPI:
         return {
             "success": True,
             "repaired_count": len(purged_sources),
-            "deleted_count": deleted_count
+            "deleted_count": deleted_count,
+            "kept_count": len(kept_paths),
         }
+
+    @staticmethod
+    def _is_cut_short_copy(candidate: str, source: str) -> bool:
+        """True only when every byte of `candidate` matches the start of
+        `source`, and `source` is still a regular file: the signature of a
+        copy that was cut short (or of a complete copy). Deleting such a file
+        loses nothing, because the next run can copy the source again.
+
+        Anything else is False: the source is gone (so `candidate` may be the
+        last copy), the file was edited, appended to, or replaced after
+        organizing, or it cannot be read.
+        """
+        try:
+            if os.path.islink(source) or not os.path.isfile(source):
+                return False
+            if os.path.islink(candidate) or not os.path.isfile(candidate):
+                return False
+            if os.path.getsize(candidate) > os.path.getsize(source):
+                return False
+            with open(candidate, "rb") as cand_fh, open(source, "rb") as src_fh:
+                while True:
+                    chunk = cand_fh.read(1024 * 1024)
+                    if not chunk:
+                        return True
+                    if src_fh.read(len(chunk)) != chunk:
+                        return False
+        except OSError:
+            return False
 
     def auto_repair_if_needed(self, dest_abs: str):
         """
@@ -1699,6 +1742,8 @@ class OrganizerAPI:
         if res.get("success") and res.get("repaired_count", 0) > 0:
             count = res["repaired_count"]
             self.log_cb(f"🧹 [Auto-Repair] Detected {count} missing/corrupted file record(s) from a previous interrupted run. Automatically cleared bad records so they will be re-transferred cleanly.")
+        if res.get("success") and res.get("kept_count", 0) > 0:
+            self.log_cb(f"🛡️ [Auto-Repair] Kept {res['kept_count']} file(s) that no longer match their record (edited after organizing, or the original is gone). Nothing was deleted; if the original still exists it will be copied again next to the kept file.")
 
 
 

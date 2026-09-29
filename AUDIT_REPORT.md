@@ -61,6 +61,59 @@ Findings are numbered in the order they were identified, not by severity, and
 are added here as each one is confirmed. Commit hashes are listed in the
 summary table at the end of this section.
 
+#### P1-01 (Critical): repair and auto-repair permanently delete the last copy of a file
+
+- **Location:** `src/api_organizer.py`, `OrganizerAPI.repair_transfer` (the
+  deletion step), reached from the Verify & Repair button and from
+  `auto_repair_if_needed`, which `run()` calls before every real transfer into
+  a destination that already has a checkpoint database.
+- **What happens:** any destination file whose size (or, in deep mode, its
+  sampled hash) no longer matched its checkpoint record was deleted with
+  `_force_remove`, which bypasses the Trash and even clears a Finder lock.
+  Repair never checked whether the source still existed, or whether the file
+  was really a broken copy rather than one the owner changed after
+  organizing. So it deleted:
+  - organized files the owner later edited (a document, a photo retouched in
+    place, a spreadsheet), at the start of the next merge or resume, and
+  - any mismatching file whose source had since been wiped, which is exactly
+    the owner's plan for the source drive. Then the deleted file was the last
+    copy.
+- **Steps to reproduce:** organize a folder; append a line to an organized
+  `.txt` file; run another real transfer (merge) from any source into the same
+  destination. The edited file is gone, not in the Trash. Or: organize, delete
+  the source file, change the organized file, and click Verify & Repair.
+- **Fix:** a new fourth condition for deleting: the file must be a cut-short
+  (or complete) copy of a source file that still exists, meaning every byte of
+  the file matches the start of the source (`OrganizerAPI._is_cut_short_copy`).
+  Deleting that loses nothing, and the next run copies it again. Any other
+  mismatching file is kept, and only its checkpoint record is cleared, as
+  before. `repair_transfer` now also returns `kept_count`, and auto-repair logs
+  it.
+- **Behaviour change to note:** after a kept file's record is cleared, a
+  later run whose source still has the original copies the original again,
+  next to the kept file (for example `letter_1.txt`). Nothing is lost, but the
+  owner may see both versions. A copy that was damaged in some other way (for
+  example zero-filled after a power cut, rather than cut short) is also kept
+  now instead of deleted, next to the fresh copy. Deleting it is left to the
+  owner.
+- **Residual risk:** an edit that only truncates a file (keeping its first
+  bytes unchanged) still looks like a cut-short copy and is deleted. Every byte
+  of it still exists in the source, so no data is lost.
+- **Existing test changed:** `test_data_safety.py`,
+  `test_negative_control_genuinely_corrupt_file_is_still_removed`, seeded a
+  record whose source (`/src/broken.bin`) did not exist and expected the
+  mismatching file to be deleted. Under the new rule that file could be the
+  last copy, so it is kept. The fixture now creates a real source whose first
+  bytes match the cut-short copy; the test still checks that repair removes a
+  genuinely broken copy.
+- **Status:** Fixed. Tests in `tests/test_pass1_repair_keeps_last_copy.py`
+  (the first three fail on `92ed5c1`):
+  - `test_repair_keeps_changed_copy_when_source_is_gone`
+  - `test_auto_repair_keeps_file_edited_after_organizing`
+  - `test_deep_repair_keeps_same_size_edit`
+  - `test_repair_still_removes_truncated_copy_and_resync_restores_it`
+    (negative control, passes before and after)
+
 #### P1-07 (High): parallel transfer workers crash the app with a segmentation fault
 
 - **Location:** `src/file_ops.py`, `FileEngine.is_already_copied`,

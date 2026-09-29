@@ -118,8 +118,13 @@ class RepairTransferTests(TempCaseMixin, unittest.TestCase):
     def test_negative_control_genuinely_corrupt_file_is_still_removed(self):
         """Repair must still do its job, or the tests above prove nothing."""
         corrupt = write_file(os.path.join(self.dest, "Documents", "broken.bin"), b"tiny")
+        # The source still exists and the destination holds only its first
+        # bytes: a cut-short copy. (Audit pass 1, P1-01: a mismatching file
+        # whose source is gone may be the last copy, so repair now keeps it.)
+        source = write_file(os.path.join(self.tmp, "src", "broken.bin"),
+                            b"tiny" + b"\0" * (999999 - 4))
         self._seed_db([
-            ("/src/broken.bin", corrupt, 999999, "", "completed"),  # size mismatch
+            (source, corrupt, 999999, "", "completed"),  # size mismatch
         ])
 
         result = self._api().repair_transfer(self.dest)
