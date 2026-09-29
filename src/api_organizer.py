@@ -841,6 +841,21 @@ class OrganizerAPI:
             ".imovielibrary", ".tvlibrary", ".musiclibrary",
         )
 
+        # Folders whose contents another system deletes on its own: the
+        # Windows and Linux trash, OS scratch and version stores, and sync
+        # tools' caches and old versions. A copy in one of these must never be
+        # the one that is kept (and nothing inside them is the owner's to
+        # dedupe). Without this, the recycled "$R3XK2P1.JPG" in $RECYCLE.BIN
+        # outranked the live "IMG_1234.JPG" (whose "_1234" looks like a copy
+        # suffix), so the live photo was the one deleted (audit P2-03).
+        # Compared case-insensitively; ".Trash-<uid>" is matched by prefix.
+        OTHER_SYSTEM_DIRS = {
+            "$recycle.bin", "recycler", "recycled", "system volume information",
+            ".trash", ".trashes", ".temporaryitems", ".documentrevisions-v100",
+            ".mobilebackups", "backups.backupdb",
+            ".dropbox.cache", ".stversions",
+        }
+
         size_groups: Dict[int, List[str]] = {}
         scanned_files = 0
         seen_dirs = set()
@@ -877,6 +892,8 @@ class OrganizerAPI:
                 and not d.startswith(".unzipped_")
                 and d != ".Duplicates_Trash"
                 and not d.lower().endswith(PACKAGE_BUNDLE_EXTS)
+                and d.lower() not in OTHER_SYSTEM_DIRS
+                and not d.lower().startswith(".trash-")
                 and not os.path.islink(os.path.join(root, d))
             ]
 

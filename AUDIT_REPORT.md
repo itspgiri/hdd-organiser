@@ -666,3 +666,51 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_delete_refused_when_kept_copy_changed_after_scan`
   - `test_unchanged_duplicate_is_still_deleted` (control, passes before and
     after)
+
+#### P2-03 (High): the copy kept can be the one in the Windows or Linux trash, and the live file is deleted
+
+- **Location:** `src/api_organizer.py`, `OrganizerAPI.find_duplicates_inplace`
+  (which folders the scan skips, and `_original_sort_key`, which picks the
+  copy to keep).
+- **What happens:** the scan skips macOS's `.Trash` and `.Trashes`, but not
+  the Windows Recycle Bin (`$RECYCLE.BIN`, `RECYCLER`) or the Linux desktop
+  trash (`.Trash-1000`). An exFAT drive is exactly the kind that gets plugged
+  into Windows and Linux machines, so these folders are common on it. Copies
+  in them are grouped with the live files, and the keep heuristic often
+  prefers the trashed one:
+  - Windows renames a recycled file to something like `$R3XK2P1.JPG`. The
+    heuristic treats a name ending in `_<digits>` as "looks like a copy", and
+    camera names such as `IMG_1234.JPG` or `DSC_0001.JPG` all end that way.
+    So the recycled copy always outranks the live photo.
+  - A Linux trash copy keeps its name, so the shallower path wins:
+    `.Trash-1000/files/IMG_2001.JPG` beats `Photos/2023/06/IMG_2001.JPG`.
+
+  "Delete all redundant", and the default selection, which is every file
+  but the kept one, then delete the live photo. The only copy left is in a
+  trash folder that Windows or the Linux desktop empties on its own, or that
+  the owner empties as junk. The same applies to other folders whose contents
+  another program deletes on its own schedule: Syncthing's `.stversions`,
+  Dropbox's `.dropbox.cache`, macOS's `.TemporaryItems`.
+- **Steps to reproduce:** in the scanned folder, create
+  `Photos/IMG_1234.JPG` and an identical
+  `$RECYCLE.BIN/S-1-5-21-…-1001/$R3XK2P1.JPG`. Scan and delete all
+  redundant copies. `Photos/IMG_1234.JPG` is deleted; the Recycle Bin copy
+  is kept.
+- **Fix:** the duplicates scan now also skips (case-insensitively) the
+  Windows Recycle Bin (`$RECYCLE.BIN`, `RECYCLER`, `RECYCLED`), `System Volume
+  Information`, Linux `.Trash-*`, macOS `.TemporaryItems`,
+  `.DocumentRevisions-V100`, `.MobileBackups` and `Backups.backupdb`, and
+  `.dropbox.cache` and `.stversions`. Nothing inside them is offered, and no
+  copy in them can be the one kept. The shared skip lists in `scanner.py`
+  are unchanged, so the organize flow is not affected (see the note under
+  "For later passes").
+- **Not fixed:** the keep heuristic itself still ranks `IMG_1234.JPG` as a
+  copy. That is harmless once trash folders are skipped, but it is a poor
+  signal; see the recommendations.
+- **Status:** Fixed. Tests in `tests/test_pass2_skip_os_trash.py` (the first
+  three fail on `92ed5c1`):
+  - `test_windows_recycle_bin_copy_is_not_kept_instead_of_live_photo`
+  - `test_linux_trash_copy_is_not_kept_instead_of_live_photo`
+  - `test_other_self_emptying_folders_are_skipped`
+  - `test_duplicates_in_ordinary_folders_are_still_found` (control, passes
+    before and after)
