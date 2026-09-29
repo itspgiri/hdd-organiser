@@ -632,3 +632,37 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_scan_finds_duplicates_in_subfolders`
   - `test_scan_still_skips_code_projects` (the project check now runs)
   - `test_scan_endpoint_completes` (through `/api/dup_scan_start`)
+
+#### P2-02 (High): delete and quarantine remove a file that changed after the scan
+
+- **Location:** `src/api_organizer.py`, `OrganizerAPI.trash_inplace_duplicates`
+  (the check against the kept copy before each removal).
+- **What happens:** the scan compares every byte, but a 2 TB scan takes
+  hours and the owner acts on the results later. Before removing a file, the
+  utility re-checked it against the copy being kept, but only compared the
+  size and `get_part_hash`, which hashes the first and last 1 MB. A file
+  changed in the middle after the scan, with the same size, still matched and
+  was deleted or quarantined. That was the last copy of its new content. The
+  same happened the other way round: if the kept copy changed in the middle,
+  the selected copy (now the last copy of the original) was deleted.
+  VeraCrypt containers, VM disks, disk images and databases change in exactly
+  this way, and VeraCrypt keeps the container's modification time by default,
+  so not even the date shows it.
+- **Steps to reproduce:** create two identical 3 MB files in different
+  folders and scan. Overwrite 4 KB in the middle of the second one, then
+  permanently delete it from the results. It is deleted.
+- **Fix:** compare every byte (`files_are_identical`) against the kept copy
+  right before each removal. Anything that differs is kept and listed as
+  "no longer matches original copy - kept safe."
+- **Cost:** each removal now reads the selected file and the kept copy in
+  full, as the scan already did. At the owner's scale (about 1 TB of
+  duplicates) that adds hours to a delete on a USB hard drive. That is the
+  price of not deleting on a guess; faster options are in the
+  recommendations at the end of this section.
+- **Status:** Fixed. Tests in `tests/test_pass2_verify_full_content.py` (the
+  first three fail on `92ed5c1`):
+  - `test_permanent_delete_keeps_copy_changed_after_scan`
+  - `test_quarantine_keeps_copy_changed_after_scan`
+  - `test_delete_refused_when_kept_copy_changed_after_scan`
+  - `test_unchanged_duplicate_is_still_deleted` (control, passes before and
+    after)

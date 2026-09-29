@@ -990,7 +990,7 @@ class OrganizerAPI:
         import errno
         import shutil
         from .categorizer import split_filename_ext
-        from .file_ops import _force_remove, get_part_hash, files_are_identical
+        from .file_ops import _force_remove, files_are_identical
 
         requested_set = {os.path.abspath(p) for p in source_paths if p}
         if not requested_set:
@@ -1054,9 +1054,11 @@ class OrganizerAPI:
                             f"{os.path.basename(file_path)}: points to the exact same file as original - kept safe."
                         )
                         continue
-                    file_sz = os.path.getsize(file_path)
-                    twin_sz = os.path.getsize(twin)
-                    if file_sz != twin_sz or get_part_hash(file_path, file_sz) != get_part_hash(twin, twin_sz):
+                    # The sampled hash only reads the first and last 1 MB, so
+                    # a file changed in the middle after the scan (same size)
+                    # still matched and was deleted although it was no longer
+                    # a duplicate (audit P2-02). Compare every byte instead.
+                    if not files_are_identical(file_path, twin):
                         refused.append(
                             f"{os.path.basename(file_path)}: no longer matches original copy - kept safe."
                         )
