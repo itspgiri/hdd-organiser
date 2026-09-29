@@ -36,7 +36,7 @@ def run_cli():
     args = parser.parse_args()
 
     source = args.source
-    if not source:
+    if source is None:
         print_info("Welcome! Let's organize your drive.")
         print_info("Opening folder selection dialog...")
         source = _macos_choose_folder("Select your messy SOURCE folder to organize:")
@@ -45,7 +45,7 @@ def run_cli():
             return
 
     dest = args.dest
-    if not dest:
+    if dest is None:
         print_info("Opening folder selection dialog for destination...")
         dest = _macos_choose_folder("Select your DESTINATION folder (where organized files will go):")
         if not dest:
@@ -55,6 +55,10 @@ def run_cli():
     sources_list = split_source_paths(source)
     if not sources_list:
         print_error("No valid source directory provided.")
+        return
+
+    if not dest or not str(dest).strip():
+        print_error("Safety Error: Destination path cannot be empty.")
         return
 
     for src_item in sources_list:
@@ -185,6 +189,8 @@ def run_cli():
 
     if len(scanner.files_to_process) == 0 and len(scanner.projects_found) == 0:
         print_warning("No files to move!")
+        if not initial_preview_scan:
+            scanner.cleanup_staging()
         return
 
     print_warning("This is a preview. No files have been moved yet.")
