@@ -17,7 +17,7 @@ from .dates import DateExtractor
 from .file_ops import (
     FileEngine, safe_copy, restore_timestamps, copy_project_intact,
     project_already_copied, files_are_identical, PROJECT_IGNORE_PATTERNS,
-    _force_remove, _clear_immutable,
+    _force_remove, _clear_immutable, PARTIAL_SUFFIX,
 )
 
 # Video containers Apple pairs with a still to make a Live Photo.
@@ -1476,7 +1476,8 @@ class OrganizerAPI:
                     for root, dirs, files in os.walk(dest_abs):
                         dirs[:] = [d for d in dirs if d not in SKIP_ORGANIZER_DIRS and not d.startswith(".unzipped_")]
                         for f in files:
-                            if f.endswith(".tmp") or f in GARBAGE_FILES:
+                            # Skip in-progress copies, not the owner's *.tmp files.
+                            if f.endswith(PARTIAL_SUFFIX) or f in GARBAGE_FILES:
                                 continue
                             dest_index.setdefault(f, []).append(os.path.join(root, f))
 

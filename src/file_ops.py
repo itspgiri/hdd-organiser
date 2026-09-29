@@ -87,6 +87,32 @@ def _truncate_filename_utf8(stem: str, suffix: str, max_bytes: int = 251) -> str
     return truncated_stem + suffix
 
 
+# Suffix of an in-progress copy: copy_file() writes "<final name>" +
+# PARTIAL_SUFFIX and renames it into place only once it is complete, so an
+# interrupted run never leaves a half-written file under its final name.
+# Stale files with this suffix are deleted before a file is placed, so no user
+# file may plausibly end with it. It used to be ".tmp", an ordinary extension:
+# the owner's own "*.tmp" files were deleted (audit pass 1, finding P1-02).
+PARTIAL_SUFFIX = ".organizer-partial"
+
+
+def partial_path_for(target_path: str) -> str:
+    """Where copy_file() writes target_path while the copy is in progress.
+
+    Always in the same folder as target_path (so the final rename is atomic)
+    and always within the 255-byte file name limit: long names are shortened
+    and made unique with a hash of the full name.
+    """
+    folder, name = os.path.split(target_path)
+    candidate = name + PARTIAL_SUFFIX
+    if len(os.fsencode(candidate)) <= 255:
+        return os.path.join(folder, candidate)
+    tail = "~" + hashlib.sha1(os.fsencode(name)).hexdigest()[:12] + PARTIAL_SUFFIX
+    budget = 255 - len(tail.encode("utf-8"))
+    stem = os.fsencode(name)[:budget].decode("utf-8", errors="ignore")
+    return os.path.join(folder, stem + tail)
+
+
 def restore_timestamps(source_path: str, target_path: str):
     """Best-effort copy of creation/access/modification times from source to target.
 
@@ -868,24 +894,27 @@ class FileEngine:
             dest_dir = os.path.dirname(base_dest)
             self.ensure_dir(dest_dir)
 
-            # Ensure the base filename + ".tmp" fits within the 255-byte macOS NAME_MAX limit
+            # Final names stay within 251 bytes, as before; partial_path_for()
+            # keeps the in-progress name within the 255-byte NAME_MAX limit.
             stem, ext = split_filename_ext(filename)
             safe_filename = _truncate_filename_utf8(stem, ext, max_bytes=251)
             base_dest = os.path.join(dest_dir, safe_filename)
 
             def _cleanup_orphan_tmp(p: str):
+                # Only ever the organizer's own leftover from an interrupted
+                # copy. Never "<p>.tmp": that is an ordinary user file name.
                 norm_p = self._norm_key(p)
-                tmp_p = p + ".tmp"
+                tmp_p = partial_path_for(p)
                 if norm_p not in self.reserved_paths and not os.path.lexists(p) and os.path.lexists(tmp_p):
                     _force_remove(tmp_p)
 
             def is_path_busy(p: str) -> bool:
                 _cleanup_orphan_tmp(p)
-                return os.path.lexists(p) or os.path.lexists(p + ".tmp") or (self._norm_key(p) in self.reserved_paths)
+                return os.path.lexists(p) or os.path.lexists(partial_path_for(p)) or (self._norm_key(p) in self.reserved_paths)
 
             # If the target path is free, reserve it immediately for this thread.
             # If another worker currently holds the reservation (including while it is
-            # writing base_dest + ".tmp"), wait for it to finish and release the
+            # writing its partial file), wait for it to finish and release the
             # reservation rather than falling through to a "name_1" collision name.
             while True:
                 with self.reserved_lock:
@@ -948,7 +977,7 @@ class FileEngine:
             return
         if not _is_regular_file(source_path):
             raise IOError(f"Unsupported special file (not a regular file): {source_path}")
-        tmp_path = target_path + ".tmp"
+        tmp_path = partial_path_for(target_path)
         if os.path.lexists(tmp_path):
             _force_remove(tmp_path)
         src_size = os.path.getsize(source_path)

@@ -114,6 +114,42 @@ summary table at the end of this section.
   - `test_repair_still_removes_truncated_copy_and_resync_restores_it`
     (negative control, passes before and after)
 
+#### P1-02 (High): organizing deletes the owner's own `*.tmp` files
+
+- **Location:** `src/file_ops.py`, `FileEngine.resolve_destination`
+  (`_cleanup_orphan_tmp`, `is_path_busy`) and `FileEngine.copy_file`.
+- **What happens:** `copy_file` writes each file to `<final name>.tmp` and
+  renames it into place when complete. To clean up after an interrupted run,
+  `resolve_destination` permanently deleted (`_force_remove`) any existing
+  `<name>.tmp` whenever it was about to place `<name>` and `<name>` did not
+  exist yet. But `.tmp` is an ordinary extension. Files such as
+  `settings.json.tmp` or `export.csv.tmp` are organized into the flat
+  `Unsorted/` folder (every unknown extension goes there), so the next time a
+  `settings.json` or `export.csv` is placed in `Unsorted/`, in the same run or
+  a later merge, the organizer deletes the earlier file. If its source was
+  wiped, that was the last copy.
+- **Steps to reproduce:** organize a drive that has `exports/data.json.tmp`;
+  then organize (merge) another drive that has `exports/data.json` into the
+  same destination. `Unsorted/data.json.tmp` is gone, not in the Trash.
+- **Fix:** in-progress copies now use the app-specific suffix
+  `.organizer-partial` (`file_ops.PARTIAL_SUFFIX`, `file_ops.partial_path_for`,
+  which also keeps the name within the 255-byte limit), and only files with
+  that suffix are ever cleaned up. Verify's fallback index now skips
+  `.organizer-partial` files instead of every `*.tmp` file, so an organized
+  `*.tmp` file can be found again after the drive is remounted elsewhere.
+  Final file names are unchanged.
+- **Note:** leftovers named `*.tmp` from an interrupted run of an older
+  version are no longer removed automatically. They cannot be told apart from
+  the owner's files, so they are left for the owner to delete.
+- **Status:** Fixed. Tests in `tests/test_pass1_partial_file_naming.py`:
+  - `test_existing_dot_tmp_file_in_destination_is_not_deleted` (fails on
+    `92ed5c1`)
+  - `test_tmp_file_organized_earlier_survives_a_later_run` (fails on
+    `92ed5c1`)
+  - `test_leftover_partial_copy_is_still_cleaned_up` and
+    `test_partial_name_fits_macos_name_limit` cover the new suffix. They error
+    on `92ed5c1` because `partial_path_for` does not exist there.
+
 #### P1-07 (High): parallel transfer workers crash the app with a segmentation fault
 
 - **Location:** `src/file_ops.py`, `FileEngine.is_already_copied`,
