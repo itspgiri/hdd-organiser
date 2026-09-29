@@ -412,7 +412,53 @@ summary table at the end of this section.
   `test_file_that_appears_at_the_target_during_the_copy_is_kept` (fails on
   `92ed5c1`).
 
+#### P1-11 (Medium): the preview does not report what a code-project copy leaves out
+
+- **Location:** `src/scanner.py`, `Scanner.scan_directory` (the project-root
+  branch that fills `skipped_dir_breakdown`); `src/file_ops.py`,
+  `PROJECT_IGNORE_PATTERNS` (used by `copy_project_intact`).
+- **What happens:** a code project is copied without anything whose name
+  matches `PROJECT_IGNORE_PATTERNS`: `node_modules`, `venv`, `.venv`,
+  `__pycache__`, `.cache`, `.next`, `.turbo`, `.firebase`, `.gradle`,
+  `.cargo`, and also `build`, `dist` and `target`. The pattern applies to files
+  as well as folders, and at every depth. The preview's "Skipped N build/cache
+  folder(s), which will NOT be copied" line is meant to list exactly these
+  (see the comment on `SKIP_BUILD_DIRS`), so that wiping the source after
+  organizing loses nothing unexpectedly. But it listed a different set,
+  `SKIP_BUILD_DIRS`. So `build/`, `dist/` and `target/` (for example a
+  compiled thesis PDF, or the release that was shipped) and a build script
+  named `build` were left out silently. Meanwhile `Caches` and `.tmp` were
+  listed as not copied although they are. The run then ends with "All done!
+  100% of files organized safely."
+- **Steps to reproduce:** project `my_app` with `.git/HEAD`, `main.py`, a file
+  `build`, `dist/MyApp-1.0.dmg`, `target/design-targets.xlsx`,
+  `node_modules/pkg/index.js` and `Caches/notes.txt`. The preview reports only
+  `node_modules x1` and `Caches x1`. Organizing leaves out `build`, `dist`,
+  `target` and `node_modules`, and copies `Caches`.
+- **Fix:** for the project's top level, the preview now reports exactly the
+  names that match `PROJECT_IGNORE_PATTERNS`, files included, taken from the
+  same constant the copy uses.
+- **Not fixed (needs a decision):** matching names deeper inside a project
+  (for example `frontend/node_modules` or `docs/build`) are still left out
+  without being reported. Reporting them means walking every project during
+  the preview, which is slow on a large drive. Options: log them during the
+  real copy (the `ignore` callback sees every one) and in the final summary,
+  or walk projects in the preview. Separately, the owner should decide whether
+  `build`, `dist` and `target` should be left out at all: they are ordinary
+  folder names.
+- **Status:** Fixed for the top level. Test in
+  `tests/test_pass1_project_skips_reported.py`:
+  `test_preview_reports_exactly_what_the_project_copy_leaves_out` (fails on
+  `92ed5c1`: `build`, `dist` and `target` are left out without being
+  reported).
+
 ### For later passes
+
+- **Pass 4 (CLI):** the CLI's transfer loop in `src/cli.py` has the pattern
+  P1-06 fixed in `run()`: a file that disappears or cannot be read after the
+  scan is skipped with `continue`, and is neither recorded nor counted
+  (around the `os.path.getsize` call before `resolve_destination`). Check what
+  its final summary says when files were not copied.
 
 - **Pass 3 (web UI):** after P1-06, a transfer with failures still returns
   success to the UI (`run()` returns `True`), so the UI shows its normal

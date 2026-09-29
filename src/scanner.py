@@ -1,3 +1,4 @@
+import fnmatch
 import os
 import re
 import stat
@@ -5,6 +6,7 @@ import hashlib
 import tempfile
 from typing import List, Dict, Set, Tuple, Optional
 from .categorizer import Categorizer
+from .file_ops import PROJECT_IGNORE_PATTERNS
 
 GARBAGE_FILES = {
     ".DS_Store", ".localized", "Thumbs.db", "Desktop.ini", "desktop.ini",
@@ -496,10 +498,18 @@ class Scanner:
                     if root_real not in seen_projects:
                         seen_projects.add(root_real)
                         self.projects_found.append(root)
-                    # Record any build/cache directories inside the project root that
-                    # copy_project_intact will ignore (everything in SKIP_BUILD_DIRS except .git).
-                    for d in unpruned_dirs:
-                        if d in SKIP_BUILD_DIRS and d != ".git":
+                    # Record what copy_project_intact will leave out of this
+                    # project: the top-level names matching its
+                    # PROJECT_IGNORE_PATTERNS, files included. This used to
+                    # list SKIP_BUILD_DIRS instead, which missed build, dist
+                    # and target and listed Caches and .tmp, which are copied
+                    # (audit pass 1, finding P1-11). Matching names deeper in
+                    # the project are also left out and are still not
+                    # reported; finding it would mean walking every project.
+                    for d in sorted(items_set):
+                        if self.is_garbage(d):
+                            continue
+                        if any(fnmatch.fnmatch(d, pat) for pat in PROJECT_IGNORE_PATTERNS):
                             self.skipped_dir_breakdown[d] = self.skipped_dir_breakdown.get(d, 0) + 1
                             if len(self.skipped_dirs) < 50:
                                 self.skipped_dirs.append(os.path.join(root, d))
