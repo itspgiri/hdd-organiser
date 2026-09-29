@@ -269,13 +269,14 @@ def fill_volume(mountpoint):
     assert os.path.ismount(mountpoint), mountpoint
     filler = os.path.join(mountpoint, "filler")
     os.makedirs(filler, exist_ok=True)
+    prefix = f"{time.time_ns():x}"
     n = 0
     for size in (4 * MB, MB, 65536, 4096, 512, 1):
         while True:
             n += 1
-            if not _create_and_write(os.path.join(filler, f"f{n:06d}"), size):
+            if not _create_and_write(os.path.join(filler, f"{prefix}-{n:06d}"), size):
                 break
-    probe = os.path.join(filler, "probe")
+    probe = os.path.join(filler, f"{prefix}-probe")
     wrote = _create_and_write(probe, 1)
     if wrote:
         raise AssertionError("volume still accepts writes after filling")
@@ -286,12 +287,10 @@ def volume_is_full(mountpoint):
     """True if a new 1-byte file cannot be written (leaves nothing behind)."""
     probe = os.path.join(mountpoint, f".p2-probe-{os.getpid()}-{time.time_ns()}")
     try:
-        if _create_and_write(probe, 1):
-            return False
-        return True
+        return not _create_and_write(probe, 1)
     finally:
         try:
-            if os.path.exists(probe) and os.path.getsize(probe) >= 1:
+            if os.path.lexists(probe):
                 os.unlink(probe)
         except OSError:
             pass
