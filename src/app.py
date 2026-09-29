@@ -500,9 +500,14 @@ def _norm_folder(path: str) -> str:
 
 @app.route("/api/dup_scan_start", methods=["POST"])
 def dup_scan_start():
-    data = request.get_json(silent=True) or {}
-    folder = data.get("folder")
-    if not folder or not os.path.exists(folder):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    raw_folder = data.get("folder")
+    if not isinstance(raw_folder, str) or not raw_folder.strip():
+        return jsonify({"success": False, "error": "Valid folder path required"}), 400
+    folder = _norm_folder(raw_folder.strip())
+    if not os.path.isdir(folder):
         return jsonify({"success": False, "error": "Valid folder path required"}), 400
 
     with state_lock:
@@ -518,7 +523,7 @@ def dup_scan_start():
         state.dup_total = 0
         state.dup_message = "Initializing duplicate scan..."
         state.dup_results = []
-        state.dup_root = _norm_folder(folder)
+        state.dup_root = folder
         state.dup_scan_id += 1
         scan_id = state.dup_scan_id
         global active_dup_scanner_cancelled
@@ -705,9 +710,22 @@ def dup_trash_inplace():
 
 @app.route("/api/dup_empty_trash", methods=["POST"])
 def dup_empty_trash():
-    data = request.get_json(silent=True) or {}
-    root_folder = data.get("root_folder", "")
-    if not root_folder or not os.path.exists(root_folder):
+    with state_lock:
+        if state.status in ("running", "cancelling") or state.dup_status in ("running", "cancelling"):
+            return jsonify({
+                "success": False,
+                "error": "Cannot empty .Duplicates_Trash while an operation or duplicate scan is running.",
+                "files_deleted": 0,
+                "bytes_freed": 0,
+            }), 409
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    raw_root = data.get("root_folder", "")
+    if not isinstance(raw_root, str) or not raw_root.strip():
+        return jsonify({"success": False, "error": "Valid root_folder required."}), 400
+    root_folder = os.path.abspath(os.path.expanduser(raw_root.strip()))
+    if not os.path.isdir(root_folder):
         return jsonify({"success": False, "error": "Valid root_folder required."}), 400
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
