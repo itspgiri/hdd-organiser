@@ -40,6 +40,33 @@ function showRunProblems(problems) {
     box.classList.remove('hidden');
 }
 
+// The run buttons' original markup, icons included (innerText resets used to
+// drop the icons).
+const START_BTN_HTML = document.getElementById('start-btn').innerHTML;
+const CANCEL_BTN_HTML = document.getElementById('cancel-btn').innerHTML;
+
+function refreshIcons() {
+    try { if (window.lucide) lucide.createIcons(); } catch (e) { /* icons are decoration */ }
+}
+
+// The progress screen's controls follow the run (audit P3-07): Cancel only
+// while a run is active, "Return to Setup" only when none is.
+function setRunControls(running) {
+    const cancelBtn = document.getElementById('cancel-btn');
+    const startBtn = document.getElementById('start-btn');
+    cancelBtn.classList.toggle('hidden', !running);
+    cancelBtn.disabled = false;
+    cancelBtn.innerHTML = CANCEL_BTN_HTML;
+    document.getElementById('done-btn').disabled = running;
+    if (!running) {
+        startBtn.disabled = false;
+        startBtn.innerHTML = START_BTN_HTML;
+    }
+    document.getElementById('progress-box').classList.remove('hidden');
+    document.getElementById('log-box').classList.remove('hidden');
+    refreshIcons();
+}
+
 // Anything that comes off the user's disk -- file names, folder names, full
 // paths, log lines -- is untrusted markup. macOS only forbids "/" and NUL in a
 // file name, so < > & " ' are all legal and arrive verbatim from the scanner.
@@ -89,18 +116,9 @@ function startPolling() {
 
             if (isTerminal) {
                 const heading = document.getElementById('status-heading');
-                const doneBtn = document.getElementById('done-btn');
-                const startBtn = document.getElementById('start-btn');
-                const cancelBtn = document.getElementById('cancel-btn');
-                if (cancelBtn) {
-                    cancelBtn.disabled = false;
-                    cancelBtn.innerText = "⛔ Cancel Operation";
-                }
-                if (startBtn) {
-                    startBtn.disabled = false;
-                    startBtn.innerText = "Start Organizing";
-                }
-                if (doneBtn) doneBtn.disabled = false;
+                // No Cancel once the run has ended: a click here used to claim
+                // to cancel a finished run and leave Start disabled (P3-07).
+                setRunControls(false);
 
                 if (data.status === 'complete') {
                     // 'complete' includes runs where files or code projects
@@ -286,6 +304,7 @@ async function startOrganizing() {
         
         if (response.ok && data.success) {
             isTransferActive = true;
+            setRunControls(true);
             lastWasPreview = isPreview;
             document.getElementById('review-panel').classList.add('hidden');
             lastRunProblems = null;
@@ -308,12 +327,14 @@ async function startOrganizing() {
 
             alert("Error starting: " + (data.error || `HTTP ${response.status}`));
             btn.disabled = false;
-            btn.innerText = "Start Organizing";
+            btn.innerHTML = START_BTN_HTML;
+            refreshIcons();
         }
     } catch (e) {
         console.error("Error starting", e);
         btn.disabled = false;
-        btn.innerText = "Start Organizing";
+        btn.innerHTML = START_BTN_HTML;
+        refreshIcons();
     }
 }
 
@@ -722,7 +743,8 @@ async function executeFullCopy() {
 
 function resetToSetup() {
     document.getElementById('start-btn').disabled = false;
-    document.getElementById('start-btn').innerText = "Start Organizing";
+    document.getElementById('start-btn').innerHTML = START_BTN_HTML;
+    refreshIcons();
     document.getElementById('progress-fill').style.width = "0%";
     document.getElementById('progress-percentage').innerText = "0%";
     document.getElementById('progress-count').innerText = "0 / 0";
@@ -1192,11 +1214,18 @@ function downloadHistoryCSV(destPath) {
 
 async function verifyHistoryRun(destPath, run) {
     if (!destPath) return;
+    if (isTransferActive) return;
     document.getElementById('dest-path').value = destPath;
     // The check reports this run's failures, not the last run of this session's
     // (the history record has failed_files / failed_projects; audit P3-06).
     lastRunProblems = runProblems(run);
     showRunProblems(lastRunProblems);
+    // This reuses the progress screen, but no run is starting: no Cancel, no
+    // 0% bar or old log, and "Return to Setup" works (audit P3-07).
+    setRunControls(false);
+    document.getElementById('progress-box').classList.add('hidden');
+    document.getElementById('log-box').classList.add('hidden');
+    document.getElementById('status-heading').innerText = "🔍 Integrity check of a past transfer";
     showView('progress-view');
     document.getElementById('review-panel').classList.remove('hidden');
     await runVerificationChecker();
@@ -1224,6 +1253,9 @@ async function clearHistoryLog() {
 }
 
 async function cancelCurrentOperation() {
+    // Nothing to cancel once the run has ended; the rest of this function would
+    // lock Start with no poll left to unlock it (audit P3-07).
+    if (!isTransferActive) return;
     if (!confirm("Are you sure you want to cancel the organization process midway? Progress completed so far is saved safely in the checkpoint database.")) {
         return;
     }

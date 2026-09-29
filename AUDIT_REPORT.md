@@ -1517,5 +1517,41 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_from_history_it_reports_that_runs_failures`
   - `test_after_a_clean_run_it_says_what_was_and_was_not_checked`
 
+#### P3-07 (Low): the progress screen's controls outlive the run
+
+- **Location:** `src/static/script.js` (`startPolling`, `startOrganizing`,
+  `cancelCurrentOperation`, `verifyHistoryRun`, `resetToSetup`) and
+  `src/templates/index.html` (progress screen).
+- **What happens:**
+  - After a run ends, "⛔ Cancel Operation" stays on screen and live.
+    Clicking it asks whether to "cancel the organization process midway",
+    sends `/api/cancel` (which answers success with nothing to cancel), sets
+    the heading to "⛔ Cancelling — finishing the file in flight..." over a
+    finished run and adds "Cancellation requested" to that run's log. Start
+    is left disabled, reading "Cancelling...", because no poll is left to
+    restore it; only "Return to Setup" re-enables it.
+  - "Return to Setup" is disabled during the page's first run only. From
+    the second run on it stays live during the run.
+  - "Run Integrity Check" in History reuses the progress screen as if a run
+    were starting: heading "Organizing Files...", a 0% bar,
+    "Initializing...", a live Cancel, and "Return to Setup" disabled.
+- **Steps to reproduce:** run a transfer, then click "⛔ Cancel Operation"
+  on the finished screen. Or open History in a new session and click "Run
+  Integrity Check".
+- **Fix:** one function, `setRunControls`, sets the controls when a run
+  starts and when it ends: Cancel is shown only during a run, "Return to
+  Setup" is disabled only during a run, and Start gets back its original
+  label and icon. `cancelCurrentOperation` does nothing when no run is
+  active. A check from History hides the progress bar and the log, shows no
+  Cancel, and titles the screen "🔍 Integrity check of a past transfer"; it
+  is refused while a run is active.
+- **Status:** Fixed. Tests in `tests/test_pass3_run_controls.py` (all four
+  fail on `92ed5c1`; a stand-in organizer holds a run open so the tests can
+  look at the screen during it):
+  - `test_no_cancel_after_the_run_has_ended`
+  - `test_controls_during_and_after_a_second_run`
+  - `test_cancel_still_works_during_a_run`
+  - `test_history_check_does_not_look_like_a_run`
+
 ---
 
