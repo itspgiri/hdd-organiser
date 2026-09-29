@@ -1335,5 +1335,40 @@ Commit hashes are listed in the summary table at the end of this section.
   They check that each pop-up is filled and un-hidden; that it is actually
   visible is P3-03.
 
+#### P3-02 (Medium): a folder name with an apostrophe breaks the project controls, and a crafted name runs code
+
+- **Location:** `src/static/script.js`, `renderPreviewDashboard` (the code
+  project rows).
+- **What happens:** each project row put the folder's path inside a
+  JavaScript string in an inline handler:
+  `onchange="…('<path>', this.checked)"` and `onclick="inspectProject('<path>')"`.
+  `escapeHtml` turns `'` into `&#39;`, but the HTML parser turns it back
+  before the handler is compiled, so an apostrophe ends the string. For a
+  project such as `Bob's app` (common on macOS), the checkbox and the
+  inspect button threw `SyntaxError: missing ) after argument list` and did
+  nothing. A folder name is also code: a project folder named
+  ``evil');window.__ranFromFolderName=1;('`` runs
+  `window.__ranFromFolderName=1` when its checkbox or inspect button is
+  clicked, and marks the wrong path (`…/evil`) as split up. Any folder on a
+  drive the owner is given can carry such a name, and the code runs in the
+  page that holds the API token, which authorizes transfers, duplicate
+  removal, "Clear History" and dissolving code projects in the destination
+  (which deletes their `.git` history, P1-04). Rated Medium rather than High
+  because it needs a crafted folder name that is also a code project, and a
+  click. The apostrophe breakage was known before the audit; the code
+  execution was not.
+- **Steps to reproduce:** create `Projects/Bob's app/package.json` in a
+  source folder, run a dry run, and untick the project or click its
+  magnifier.
+- **Fix:** the rows carry the path only in attributes (`value`,
+  `data-path`), and the checkboxes and inspect buttons are wired with
+  `addEventListener`, reading the path back from the element. No inline
+  handler in the UI contains disk-derived text any more.
+- **Status:** Fixed. Tests in `tests/test_pass3_quotes_in_paths.py` (all
+  three fail on `92ed5c1`):
+  - `test_checkbox_for_a_project_with_an_apostrophe`
+  - `test_inspect_button_for_a_project_with_an_apostrophe`
+  - `test_a_folder_name_cannot_run_code`
+
 ---
 

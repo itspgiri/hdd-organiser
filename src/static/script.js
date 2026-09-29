@@ -370,7 +370,7 @@ function renderPreviewDashboard(summary) {
             projsHtml += `
             <div class="project-row-item flex flex-col sm:flex-row sm:items-center justify-between p-2.5 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 gap-2">
                 <label class="flex items-start gap-2.5 cursor-pointer flex-1 overflow-hidden">
-                    <input type="checkbox" class="project-checkbox mt-1 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-100 border-slate-300 dark:bg-slate-700 dark:border-slate-600" value="${escapeHtml(p.path)}" ${checkedAttr} onchange="onProjectCheckboxChange('${escapeHtml(p.path)}', this.checked)">
+                    <input type="checkbox" class="project-checkbox mt-1 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-100 border-slate-300 dark:bg-slate-700 dark:border-slate-600" value="${escapeHtml(p.path)}" ${checkedAttr}>
                     <div class="truncate ${textStyle}">
                         <div class="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate" title="${escapeHtml(p.path)}">${escapeHtml(p.path.split('/').pop())}</div>
                         <div class="text-[10px] text-slate-400 truncate" title="${escapeHtml(p.path)}">${escapeHtml(p.path)}</div>
@@ -378,7 +378,7 @@ function renderPreviewDashboard(summary) {
                 </label>
                 <div class="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto pl-7 sm:pl-0">
                     ${statusLabel}
-                    <button class="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded transition-colors" onclick="inspectProject('${escapeHtml(p.path)}')"><i data-lucide="search" class="w-4 h-4"></i></button>
+                    <button type="button" class="project-inspect-btn p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded transition-colors" data-path="${escapeHtml(p.path)}" title="Show sample files"><i data-lucide="search" class="w-4 h-4"></i></button>
                 </div>
             </div>`;
         });
@@ -454,6 +454,16 @@ function renderPreviewDashboard(summary) {
     if (selectAllBtn) selectAllBtn.addEventListener('click', () => selectAllProjects(true));
     const deselectAllBtn = document.getElementById('projects-deselect-all-btn');
     if (deselectAllBtn) deselectAllBtn.addEventListener('click', () => selectAllProjects(false));
+
+    // Paths come off the disk and may contain ' " < > & ( ) ;. They travel in
+    // attributes and are read back from the element, never pasted into inline
+    // JavaScript, where an apostrophe ended the string (audit P3-02).
+    dash.querySelectorAll('.project-checkbox').forEach(cb => {
+        cb.addEventListener('change', () => onProjectCheckboxChange(cb.value, cb.checked));
+    });
+    dash.querySelectorAll('.project-inspect-btn').forEach(btn => {
+        btn.addEventListener('click', () => inspectProject(btn.dataset.path));
+    });
 
     try { lucide.createIcons(); } catch(e) {}
 }
