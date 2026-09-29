@@ -478,14 +478,19 @@ def cancel_operation():
     #
     # The worker thread in run_organizer() now owns the transition to a
     # terminal state; this only requests the stop.
+    should_log = False
     with state_lock:
-        if active_api_instance:
-            active_api_instance.cancel()
-        if state.status == "running":
-            state.status = "cancelling"
-        state.message = "Cancelling... finishing the file currently in flight."
-    log_cb("⛔ Cancellation requested. Finishing the current file, then stopping.")
-    return jsonify({"success": True})
+        if state.status in ("running", "cancelling"):
+            if active_api_instance:
+                active_api_instance.cancel()
+            if state.status == "running":
+                state.status = "cancelling"
+            state.message = "Cancelling... finishing the file currently in flight."
+            should_log = True
+        current_status = state.status
+    if should_log:
+        log_cb("⛔ Cancellation requested. Finishing the current file, then stopping.")
+    return jsonify({"success": True, "status": current_status})
 
 
 def _norm_folder(path: str) -> str:
@@ -716,10 +721,12 @@ def dup_empty_trash():
 def dup_scan_cancel():
     global active_dup_scanner_cancelled
     with state_lock:
-        active_dup_scanner_cancelled = True
-        if state.dup_status == "running":
-            state.dup_status = "cancelling"
-    return jsonify({"success": True})
+        if state.dup_status in ("running", "cancelling"):
+            active_dup_scanner_cancelled = True
+            if state.dup_status == "running":
+                state.dup_status = "cancelling"
+        current_status = state.dup_status
+    return jsonify({"success": True, "status": current_status})
 
 
 def run_organizer(source, dest, is_preview=False, dest_mode="new", excluded_projects=None):
