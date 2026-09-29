@@ -857,3 +857,36 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_quarantine_does_not_move_files_through_a_symlinked_trash`
   - `test_emptying_a_real_trash_folder_still_works` (control, passes before
     and after)
+
+#### P2-08 (Low): emptying the trash reports success when files are left in it
+
+- **Location:** `src/api_organizer.py`, `OrganizerAPI.empty_duplicates_trash`.
+- **What happens:** every failed delete is ignored (`except OSError: pass`),
+  and the final `shutil.rmtree(..., ignore_errors=True)` never raises, so the
+  call returns no error however many files are left. The UI then says
+  "Emptied .Duplicates_Trash: permanently deleted N files and freed X!", or,
+  when nothing at all could be deleted, "No .Duplicates_Trash folder or
+  quarantined files found in this directory". The quarantined copies are
+  still on the drive, and the owner has no reason to look. Files cannot be
+  deleted when the drive is mounted read-only (macOS does this after some
+  file-system errors), when a failing drive returns I/O errors, or when the
+  user is not allowed to delete them.
+- **Steps to reproduce:** put two files in `<scanned>/.Duplicates_Trash`,
+  one of them in a subfolder made read-only with `chmod 500`. Empty the
+  trash. The result is success with one file deleted; the other file and the
+  trash folder are still there.
+- **Fix:** failures are still skipped, so one bad file does not stop the
+  rest. Afterwards, if `.Duplicates_Trash` still exists, the call returns an
+  error that gives the number of files left, the folder, and the first error,
+  for example "1 file could not be deleted and is still in
+  …/.Duplicates_Trash (first error: [Errno 13] Permission denied: …).
+  Deleted 1 file." The endpoint then returns `success: false` with that
+  message, and the UI shows it. The message includes the number deleted
+  because the UI's error alert shows only the message.
+- **Status:** Fixed. Tests in `tests/test_pass2_empty_trash_leftovers.py`
+  (the first two fail on `92ed5c1`; all three are skipped when run as root,
+  who can delete files in a read-only folder):
+  - `test_files_left_in_trash_are_reported_as_an_error`
+  - `test_endpoint_does_not_report_success_when_files_are_left`
+  - `test_trash_that_empties_completely_still_reports_success` (control,
+    passes before and after)

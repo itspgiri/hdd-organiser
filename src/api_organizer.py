@@ -1223,6 +1223,7 @@ class OrganizerAPI:
 
         files_deleted = 0
         bytes_freed = 0
+        first_error = ""
         free_before = self._volume_free_bytes(trash_dir)
         for root, dirs, files in os.walk(trash_dir, topdown=False):
             for f in files:
@@ -1236,23 +1237,40 @@ class OrganizerAPI:
                     os.unlink(fp)
                     files_deleted += 1
                     bytes_freed += sz
-                except OSError:
-                    pass
+                except OSError as e:
+                    first_error = first_error or str(e)
             for d in dirs:
                 dp = os.path.join(root, d)
                 try:
                     os.rmdir(dp)
-                except OSError:
-                    pass
-        err = ""
-        try:
-            shutil.rmtree(trash_dir, ignore_errors=True)
-        except Exception as e:
-            err = str(e)
+                except OSError as e:
+                    first_error = first_error or str(e)
+        shutil.rmtree(trash_dir, ignore_errors=True)
         bytes_freed = self._space_actually_freed(
             bytes_freed, free_before, os.path.dirname(trash_dir),
             f"Emptied .Duplicates_Trash ({files_deleted:,} files)",
         )
+        # Every failure above is ignored so that one bad file does not stop
+        # the rest, but the result used to say nothing about what was left,
+        # and the UI reported the trash as emptied (audit P2-08).
+        err = ""
+        if os.path.lexists(trash_dir):
+            left = sum(len(fs) for _, _, fs in os.walk(trash_dir))
+
+            def n_files(n):
+                return f"{n:,} file" + ("" if n == 1 else "s")
+
+            if left:
+                err = (
+                    f"{n_files(left)} could not be deleted and "
+                    f"{'is' if left == 1 else 'are'} still in {trash_dir}"
+                )
+            else:
+                err = f"{trash_dir} could not be removed"
+            if first_error:
+                err += f" (first error: {first_error})"
+            err += f". Deleted {n_files(files_deleted)}."
+            self.log_cb(f"Warning: {err}")
         return files_deleted, bytes_freed, err
 
 
