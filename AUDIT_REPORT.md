@@ -715,7 +715,7 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_duplicates_in_ordinary_folders_are_still_found` (control, passes
     before and after)
 
-#### P2-04 (Medium): two removal requests at the same time can delete every copy
+#### P2-04 (Low): two removal requests at the same time can delete every copy
 
 - **Location:** `src/api_organizer.py`, `OrganizerAPI.trash_inplace_duplicates`
   and `empty_duplicates_trash`, reached from `/api/dup_trash_inplace` and
@@ -727,9 +727,12 @@ Commit hashes are listed in the summary table at the end of this section.
   `a`) and another removing `a` (keeping `b`) could both pass their checks
   before either removed anything, and together they removed both copies. The
   UI disables its buttons while a request runs, so normal use does not send
-  two such requests; a stuck request plus a page reload, or a second client,
-  can. The brief requires the backend to be safe whatever the UI sends, so
-  this breaks G4.
+  two such requests. It takes a second request, sent while the first is
+  still running, that keeps the very copy the first one deletes: for
+  example after reloading the window during a long delete, which shows the
+  old groups again. That is a narrow case (rated Low, like pass 1's race in
+  P1-10), but it breaks G4, and the brief requires the backend to be safe
+  whatever the UI sends.
 - **Steps to reproduce:** scan a folder with one pair of duplicates. Send two
   `/api/dup_trash_inplace` requests at the same time, one selecting each
   copy. The test holds each request just before it deletes, until both have
