@@ -1060,8 +1060,12 @@ class FileEngine:
                 if tmp_size != src_size:
                     raise IOError(f"Incomplete file copy: source is {src_size} bytes, but copy is {tmp_size} bytes.")
                 _clear_immutable(tmp_path)
+                # resolve_destination() reserved a free name. Anything there now
+                # appeared during the copy and is not ours: never delete or
+                # replace it (audit pass 1, finding P1-10).
                 if os.path.lexists(target_path):
-                    _force_remove(target_path)
+                    raise FileExistsError(
+                        f"A file appeared at the destination during the copy; not replacing it: {target_path}")
                 os.replace(tmp_path, target_path)
             else:
                 raise IOError("Copy failed: temp target file was not created.")

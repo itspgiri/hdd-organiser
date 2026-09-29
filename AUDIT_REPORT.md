@@ -271,6 +271,29 @@ summary table at the end of this section.
     while the lock is not held. On `92ed5c1` it flags the lookups listed under
     Location.
 
+#### P1-10 (Low): `copy_file` deletes a file that appears at its target during the copy
+
+- **Location:** `src/file_ops.py`, `FileEngine.copy_file`, the final rename.
+- **What happens:** `resolve_destination` reserves a free name, and
+  `copy_file` renames the finished copy into place at the end. If a file had
+  appeared at that name in the meantime (another app, a second organizer
+  window, the owner saving a file), `copy_file` permanently deleted it with
+  `_force_remove`, even clearing a Finder lock, and put its own copy there.
+  Reaching this needs a race with another writer, so it is unlikely, but the
+  lost file could be anything.
+- **Steps to reproduce:** in a test, make the copy step write a different file
+  to the target path before `copy_file` renames (see the test). The other file
+  is replaced.
+- **Fix:** `copy_file` now refuses: it raises `FileExistsError`, removes its
+  own partial file, and the transfer records the file as failed (and, after
+  P1-06, counts it). A tiny window remains between the check and the rename;
+  closing it would need an exclusive rename (`renamex_np` with `RENAME_EXCL`),
+  which is left as a recommendation. The same pattern (check, then `rename`)
+  exists in the dissolve flow (P1-04) and is not changed.
+- **Status:** Fixed. Test in `tests/test_pass1_copy_never_replaces.py`:
+  `test_file_that_appears_at_the_target_during_the_copy_is_kept` (fails on
+  `92ed5c1`).
+
 ### For later passes
 
 - **Pass 3 (web UI):** after P1-06, a transfer with failures still returns
