@@ -42,6 +42,8 @@ class UIState:
     dup_total = 0
     dup_message = "Ready"
     dup_results = []
+    dup_root = ""      # normalised folder that dup_results belong to
+    dup_scan_id = 0    # bumped by every scan start; see dup_scan_start
 
 
 state = UIState()
@@ -482,6 +484,11 @@ def cancel_operation():
     return jsonify({"success": True})
 
 
+def _norm_folder(path: str) -> str:
+    """One spelling per folder, so a scanned folder can be compared with a request's."""
+    return os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+
+
 @app.route("/api/dup_scan_start", methods=["POST"])
 def dup_scan_start():
     data = request.get_json(silent=True) or {}
@@ -490,13 +497,21 @@ def dup_scan_start():
         return jsonify({"success": False, "error": "Valid folder path required"}), 400
 
     with state_lock:
-        if state.dup_status == "running":
+        # "cancelling" too: the old scan only notices a cancel at its next
+        # progress callback, which can be minutes away inside one large file
+        # comparison. Starting a new scan meanwhile reset the shared cancel
+        # flag, so the old scan carried on and later published its results
+        # over the new scan's (audit P2-06).
+        if state.dup_status in ("running", "cancelling"):
             return jsonify({"success": False, "error": "Scan already running"})
         state.dup_status = "running"
         state.dup_progress = 0
         state.dup_total = 0
         state.dup_message = "Initializing duplicate scan..."
         state.dup_results = []
+        state.dup_root = _norm_folder(folder)
+        state.dup_scan_id += 1
+        scan_id = state.dup_scan_id
         global active_dup_scanner_cancelled
         active_dup_scanner_cancelled = False
 
@@ -518,7 +533,7 @@ def dup_scan_start():
         
         # We need to hack cancelled flag because it's set by cancel() in api_organizer
         def check_cancel():
-            if active_dup_scanner_cancelled:
+            if active_dup_scanner_cancelled or state.dup_scan_id != scan_id:
                 api.cancelled = True
         
         # Override log_cb to also check cancel so it can abort loops
@@ -538,7 +553,9 @@ def dup_scan_start():
         try:
             groups = api.find_duplicates_inplace(folder)
             with state_lock:
-                if active_dup_scanner_cancelled:
+                if state.dup_scan_id != scan_id:
+                    pass  # superseded by a newer scan: publish nothing
+                elif active_dup_scanner_cancelled:
                     state.dup_status = "cancelled"
                 else:
                     state.dup_results = groups
@@ -546,8 +563,9 @@ def dup_scan_start():
                     state.dup_message = "Scan complete."
         except Exception as e:
             with state_lock:
-                state.dup_status = "error"
-                state.dup_message = str(e)
+                if state.dup_scan_id == scan_id:
+                    state.dup_status = "error"
+                    state.dup_message = str(e)
             print(f"Dup scan error: {e}")
 
     thread = threading.Thread(target=run_dup_scan)
@@ -588,9 +606,11 @@ def dup_reveal():
 @app.route("/api/dup_trash_inplace", methods=["POST"])
 def dup_trash_inplace():
     with state_lock:
-        if state.dup_status == "running":
+        if state.dup_status in ("running", "cancelling"):
             return jsonify({"success": False, "error": "Cannot remove duplicates while scan is running.", "count": 0, "refused": []}), 409
         groups_snapshot = list(state.dup_results or [])
+        scan_root = state.dup_root
+        scan_id = state.dup_scan_id
 
     data = request.get_json(silent=True) or {}
     source_paths = data.get("source_paths", [])
@@ -605,6 +625,18 @@ def dup_trash_inplace():
 
     if not source_paths or not root_folder:
         return jsonify({"success": False, "error": "source_paths and root_folder required.", "count": 0, "refused": []}), 400
+
+    # root_folder comes from the UI's editable path field. It used to be
+    # trusted as-is, so results from one folder could be quarantined into
+    # another folder's .Duplicates_Trash, even on another drive (audit P2-06).
+    if not scan_root or _norm_folder(root_folder) != scan_root:
+        return jsonify({
+            "success": False,
+            "error": f"The duplicate results are for {scan_root or 'no folder yet'}. "
+                     f"Scan {root_folder} before removing anything from it.",
+            "count": 0,
+            "refused": [],
+        }), 409
 
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
@@ -624,7 +656,9 @@ def dup_trash_inplace():
             remaining_groups.append({"size": g.get("size", 0), "files": surviving})
 
     with state_lock:
-        state.dup_results = remaining_groups
+        # A scan started meanwhile owns dup_results now.
+        if state.dup_scan_id == scan_id:
+            state.dup_results = remaining_groups
 
     return jsonify({
         "success": True,

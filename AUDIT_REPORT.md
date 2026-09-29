@@ -783,3 +783,51 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_emptying_trash_of_clone_does_not_claim_space`
   - `test_permanent_delete_of_real_copy_reports_its_size` (control, passes
     before and after)
+
+#### P2-06 (Medium): results can belong to a different folder than the one the UI shows
+
+- **Location:** `src/app.py`, `dup_scan_start` / `run_dup_scan` and
+  `dup_trash_inplace`.
+- **What happens:** two ways to act on one folder's results while believing
+  they are another's:
+  1. **Cancel, then scan another folder.** `dup_scan_start` only refused
+     while the status was `running`. After a cancel the status is
+     `cancelling` until the old scan reaches its next progress callback. Inside
+     one comparison of two large videos that can take minutes. A new scan could
+     start meanwhile, and starting it reset the shared cancel flag, so the old
+     scan was no longer cancelled. It ran to the end and published its results
+     over the new scan's: the UI showed folder A's duplicates as the results
+     for folder B. `dup_trash_inplace` likewise only refused while `running`.
+  2. **The folder named in the request was not checked.** `dup_trash_inplace`
+     used the `root_folder` the UI sent, which is the value of the editable
+     path field at the time of the click, for `.Duplicates_Trash`, without
+     checking that the results were for that folder. Scan A, change the field
+     to B, click Quarantine: A's duplicates were moved into
+     `B/.Duplicates_Trash`. If B is on another drive, `shutil.move` copies
+     each file across and deletes the original.
+
+  Each group still keeps one copy, so G4 holds, but the owner acts on files
+  they did not mean to touch.
+- **Steps to reproduce:** (1) start a scan of a large folder A, cancel it
+  during a big file comparison, and start a scan of B; A's results appear
+  when A's scan finishes. (2) scan A, change the path field to B, quarantine
+  a duplicate; it lands in `B/.Duplicates_Trash`.
+- **Fix:** the scanner state now records which folder the results belong to
+  (`dup_root`) and which scan produced them (`dup_scan_id`).
+  - A new scan is refused while the previous one is still `cancelling`.
+  - A superseded scan stops at its next check and never publishes.
+  - A removal request whose `root_folder` is not the scanned folder is
+    refused with HTTP 409 and an error saying which folder the results are
+    for. Paths are compared after resolving `~`, `..`, trailing slashes and
+    symlinks.
+  - A removal that finishes after a newer scan has started no longer writes
+    its pruned groups over the new results.
+
+  Emptying the trash still accepts any folder, because it does not use scan
+  results.
+- **Status:** Fixed. Tests in `tests/test_pass2_scan_state.py` (the first two
+  fail on `92ed5c1`):
+  - `test_cancelled_scan_cannot_replace_a_later_scans_results`
+  - `test_quarantine_refuses_a_folder_other_than_the_scanned_one`
+  - `test_quarantine_into_the_scanned_folder_still_works` (control, passes
+    before and after)
