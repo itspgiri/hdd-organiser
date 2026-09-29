@@ -9,7 +9,7 @@ A separate reviewer checks all passes at the end.
 |------|-------|--------|
 | 1 | Data safety in the organize flow's backend | Complete |
 | 2 | Duplicates utility | Complete |
-| 3 | Web UI | In progress |
+| 3 | Web UI | Complete |
 | 4 | CLI and local API | Not started |
 
 ---
@@ -1272,13 +1272,31 @@ endpoints as an attack surface.
   UI works on is synthetic, in a private temp folder that the test deletes.
   The history file and the app's `base_dir` point into that folder, so
   History and "Clear History" never touch `src/run_history.json`, and
-  `subprocess` in `src/app.py` and `src/api_organizer.py` is replaced by a
-  recorder, so no Finder window, folder picker, `diskutil` run or sound is
-  started. Fixtures are in `tests/pass3_helpers.py`.
+  `subprocess` in `src/app.py`, `src/api_organizer.py` and `src/file_ops.py`
+  is replaced by a recorder, so no Finder window, folder picker, `diskutil`,
+  `caffeinate` or sound is started; the folder pickers are answered with
+  synthetic folders. Fixtures are in `tests/pass3_helpers.py`.
 - Every test fails on any JavaScript error in the console (uncaught
   exceptions and `console.error`). The browser's own "Failed to load
   resource" line for an HTTP error status is allowed only when the test
-  provoked that status (the 409 and 500 responses from passes 1 and 2).
+  provoked that status; only P3-09's tests do, by answering the
+  verification request with a 500.
+- **Click-everything suite** (`tests/test_pass3_click_everything.py`): nine
+  walks through every screen and pop-up with real mouse clicks, including a
+  real transfer, dry run, verification, repair, cancel, History, and the
+  duplicates utility (scan, cancel, filter, select, reveal, quarantine,
+  delete, empty the trash). An init script records every control that
+  receives an event. The last test fails if any control in the page's
+  markup, or any of the 17 controls the page builds from results, was not
+  used. The whole suite runs twice, in light and in dark mode (20 tests, about
+  60 s).
+- **Screenshots:** `tests/pass3_screenshots.py` (not part of `make test`)
+  captures all 20 screens and pop-ups in both modes into
+  `audit_screenshots/pass3/light/` and `audit_screenshots/pass3/dark/`; see
+  the index below.
+- **Network:** the page loads Tailwind, Lucide and a Google font from CDNs,
+  so the browser tests need internet access, as the app itself does (see
+  Recommendations).
 - **Engine:** pywebview draws the app with WebKit (WKWebView) on macOS.
   Playwright's WebKit build is ad-hoc signed and Santa blocks it on this Mac
   ("blocked from executing because its trustworthiness cannot be
@@ -1293,7 +1311,9 @@ endpoints as an attack surface.
   `.venv/bin/pip uninstall -y playwright pyee greenlet`. Without Playwright
   the browser tests are skipped, not failed.
 - Each fix is its own commit, together with a test that fails on `92ed5c1`
-  and passes with the fix. `make test` passes at every commit.
+  and passes with the fix. The one exception is a regression introduced by
+  P3-06 and fixed in P3-09; its test fails on the commit before the fix.
+  `make test` passes at every commit.
 
 ### Findings
 
@@ -1599,6 +1619,254 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_the_whole_verification_result_is_visible` (fails on `c280a76`,
     where the note was cut off; on `92ed5c1` it fails because the note did
     not exist yet)
+
+### Checked, no change needed
+
+- **Pass 2's follow-ups for this pass** (read, not run in the browser):
+  - P2-06: when the path field no longer names the scanned folder, removal
+    answers 409 and the UI shows "Error: " followed by the backend's
+    message, "The duplicate results are for <folder>. Scan <other folder>
+    before removing anything from it.", which names both folders. Showing
+    the scanned folder above the results is Recommendation 4.
+  - P2-08: a partly failed "Empty .Duplicates_Trash" shows "Error emptying
+    .Duplicates_Trash: " followed by the backend's message, which ends
+    "Deleted N files." So the number deleted is shown; the space freed is
+    not. Left as is.
+  - P2-03 and P2-09: see Recommendation 4.
+- **Repair:** "⚡ Repair & Re-Sync Failed Files" appears when a copied file
+  is missing at the destination, and it copies the file again
+  (`test_verification_repair_button`).
+- **Every control** in the page is used by the click-everything suite, in
+  both modes, with no JavaScript errors.
+- **Screenshots:** all 40 (20 screens and pop-ups in each mode, index
+  below) were looked at, at full size or on contact sheets. No button or
+  control is clipped, drawn outside its card, or hidden behind the sticky
+  nav or footer. Long lists scroll inside their own box on purpose (the
+  duplicate groups, and the project and duplicate lists of the review
+  tools).
+
+### Recommendations
+
+These need the owner's decision. P3-06 points here.
+
+1. **Serve the page's third-party files from the app.** Tailwind's CDN
+   build, Lucide (`lucide@latest` from unpkg) and the Inter font (Google
+   Fonts) are fetched at every launch.
+   - Offline, the page loses its layout and every icon: no card, default
+     browser buttons, plain text
+     (`audit_screenshots/pass3/evidence/offline-welcome.png`), and the
+     console shows `tailwind is not defined` and `lucide is not defined`.
+     The views and the pop-ups stay hidden, because `style.css` hides
+     them, but the boxes that only Tailwind's `hidden` class hides would
+     show: the duplicates screen's progress and results boxes before a
+     scan, and on the progress screen the red "not copied" box, the review
+     panel, and Cancel after a run (read from the markup and `script.js`,
+     not captured).
+   - `@latest` lets the icon set change under the app without a release;
+     a renamed icon leaves an empty placeholder, as `check-shield` did
+     (P3-08).
+   - Every script in the page can read the API token and call every
+     endpoint, including permanent delete (see "For later passes").
+
+   Pinned copies in `src/static/`, with Tailwind compiled once into a CSS
+   file, fix all three. This changes how the app is built, so it is left to
+   the owner.
+2. **Dark mode cannot be turned on.** Every screen has dark styles, but
+   Tailwind is configured with `darkMode: 'class'` and nothing adds the
+   `dark` class, so the app is always light, even when macOS is dark. The
+   tests and screenshots add the class themselves. Either follow the system
+   setting or drop the dark styles.
+3. **Make the verification check what the owner relies on (P3-06).** Check
+   code projects too (for example their file lists and sizes), record failed
+   project copies in the checkpoint so that they are reported missing, and
+   either hash whole files or keep saying that the check is a sample.
+4. **Duplicates screen (P2-03, P2-06, P2-09).** Show which folder the
+   results belong to, and which folders the scan skips (OS trash folders,
+   packages such as photo libraries and virtual machines, and
+   `.Duplicates_Trash`), so that the owner knows why a big library's
+   duplicates do not appear.
+5. **Keyboard use.** The breadcrumbs are `<span>` elements with click
+   handlers, so Tab cannot reach them, and `script.js` handles no key
+   presses, so a pop-up closes only with the mouse.
+6. **No inline handlers.** P3-02 moved every handler that carried a path to
+   `addEventListener`; the template still has fixed inline `onclick`,
+   `onchange`, `oninput` and `onkeyup` attributes. With none left, a
+   Content-Security-Policy could forbid inline script: a second line of
+   defence for the API token.
+7. **Plainer safety wording on the duplicates screen.** Above the results
+   it says "100% Full-Drive Safe: Every group keeps at least 1 verified
+   Original copy untouched". What stands behind it holds in pass 2's tests:
+   one copy of every group is kept (G4), and each file is compared in full
+   with the kept copy before it is removed (P2-02). But P2-10 is open:
+   emptying `.Duplicates_Trash` does not check that the kept copies still
+   exist. Wording such as "Every group keeps one copy. Each file is
+   compared in full with that copy before it is removed." says what is
+   checked without promising 100%, as P3-06 did for the verifier. Left to
+   the owner because P2-10 is.
+
+### Summary
+
+| ID | Severity | Finding | Status | Commit | Tests in `tests/` |
+|----|----------|---------|--------|--------|-------------------|
+| P3-01 | Low | Preview dashboard buttons called functions that do not exist | Fixed | `a3b633e` | `test_pass3_preview_buttons.py` (4) |
+| P3-02 | Medium | An apostrophe in a path broke the project controls; a crafted name ran code | Fixed | `88bfa85` | `test_pass3_quotes_in_paths.py` (3) |
+| P3-03 | Low | The preview dashboard's pop-ups never appeared | Fixed | `d9ccff0` | `test_pass3_modals.py` (4) |
+| P3-04 | Low | Dry-run dashboard outside the card's padding; footer cut off and not pinned | Fixed | `f4d3aed` | `test_pass3_preview_layout.py` (3) |
+| P3-05 | Medium | A transfer with failures was reported as "Organization Complete!" | Fixed | `bec3282` | `test_pass3_failed_transfer.py` (1, plus 1 control) |
+| P3-06 | High | The verifier said "100% safe to delete" without checking everything | What the UI claims fixed; what the check covers: owner decision | `74295dc` | `test_pass3_verification_claims.py` (3) |
+| P3-07 | Low | The progress screen's controls outlived the run | Fixed | `eca2db3` | `test_pass3_run_controls.py` (4) |
+| P3-08 | Low | Back button, a missing icon and a broken spinner | Fixed | `c280a76` | `test_pass3_layout_details.py` (3) |
+| P3-09 | Low | Warnings not red; the verification result cut off | Fixed | `2e02957` | `test_pass3_result_messages.py` (3) |
+
+Other pass-3 commits:
+- `6afde4c` added the shared fixtures in `tests/pass3_helpers.py` and the
+  new `requirements-dev.txt`.
+- `a3b633e` (P3-01) also started this section.
+- `5d3cf2e` and `a51b26a` added the click-everything suite
+  (`test_pass3_click_everything.py`).
+- The commit that adds this summary is the last pass-3 commit. It also adds
+  the screenshots and `tests/pass3_screenshots.py`.
+
+`make test` went from 193 tests at `b76ec52` to 242: 49 new tests in 10 new
+test files, plus the shared `tests/pass3_helpers.py`. They are 29 fix tests
+(28 and one control) and the click-everything suite, whose 10 tests run
+once in light and once in dark mode (20). No existing test was changed.
+`make test` now takes about 2¼ minutes on this Mac, most of it in the
+browser. The source changes are in `src/templates/index.html`,
+`src/static/script.js` and `src/static/style.css`, plus, for what the UI
+reports, `src/app.py` and `src/api_organizer.py` (P3-05, P3-06).
+
+The four issues known before this pass are P3-01 (the functions that do
+not exist), P3-03 (the pop-ups nested in the hidden progress view), P3-04
+(the dashboard outside the padded container) and P3-02 (apostrophes in
+inline handlers).
+
+#### Running the new tests against `92ed5c1`
+
+Run from the repository root with this branch checked out. Any empty scratch
+folder works for `W`. The page loads Tailwind and Lucide from CDNs, so the
+browser tests need internet access.
+
+```sh
+W=$(mktemp -d)/base-92ed5c1
+git worktree add --detach "$W" 92ed5c1
+git archive audit/full-app-audit-2026-09 tests/pass3_helpers.py \
+  $(git ls-tree --name-only audit/full-app-audit-2026-09 tests/ | grep 'tests/test_pass3_') \
+  | tar -x -C "$W"
+.venv/bin/python3 -c "import os,sys,unittest; os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); unittest.main(module=None, argv=['unittest','discover','-s','tests','-p','test_pass3_*.py','-v'])" "$W"
+git worktree remove --force "$W"
+```
+
+Result on 2026-09-29: 49 tests, of which 32 fail, 2 error and 15 pass
+(about 4 minutes).
+- 28 of the 29 fix tests fail, each for the reason its finding describes.
+  The 29th is P3-05's control (a clean transfer is still reported as
+  complete), which is meant to pass on both versions.
+  `test_the_whole_verification_result_is_visible` (P3-09) fails because
+  the note it measures did not exist before P3-06; on `c280a76`, the
+  commit before P3-09, it fails because the note is cut off.
+- 6 of the 20 click-everything tests do not pass, 3 in each mode:
+  - `test_preview_dashboard` fails at the first pop-up, which does not
+    appear (P3-01, P3-03).
+  - `test_duplicates_screen` errors: no results ever appear, because the
+    scan ends in "error" on any folder with a subfolder (P2-01, fixed in
+    pass 2).
+  - `test_zz_every_control_in_the_page_was_used` fails because those two
+    walks stop early, so the dashboard's and the duplicates screen's
+    controls are never used.
+- The other 7 walks pass in both modes (14 tests): welcome and navigation,
+  setup, progress and review tools, repair, cancel during a run, History,
+  and cancelling a duplicate scan. They check that each control works and
+  that nothing is logged to the console. The defects on those screens are
+  in what the screen says or how it looks (P3-05 to P3-09), which the fix
+  tests check.
+
+#### Screenshots
+
+`tests/pass3_screenshots.py` saves the same 20 files in
+`audit_screenshots/pass3/light/` and `audit_screenshots/pass3/dark/`
+(`.venv/bin/python tests/pass3_screenshots.py`; about 3.5 MB in all). All
+are at the window's width, 700 px. Tall screens are captured whole, with
+the sticky nav and footer made static for the capture so that they are not
+drawn across the middle; 06 to 09 are captured at the window's size
+(700 x 550), as the owner sees them. The data is synthetic; the preview
+includes a project named `Bob's "best" <app> & co` (P3-02).
+
+| File | Shows |
+|------|-------|
+| `01-welcome.png` | Welcome screen |
+| `02-setup.png` | Setup, with a source and a destination picked |
+| `03-history-empty.png` | History with no runs |
+| `04-duplicates-empty.png` | Duplicates utility before a scan |
+| `05-preview-dashboard.png` | Dry-run dashboard, whole page |
+| `06-preview-dashboard-window-bottom.png` | Dashboard scrolled to the end: the footer is pinned inside the card (P3-04) |
+| `07-popup-category.png` | Category samples pop-up (P3-01, P3-03) |
+| `08-popup-ignored-files.png` | Ignored system files pop-up |
+| `09-popup-inspect-project.png` | Inspect pop-up for the project with the apostrophe (P3-02) |
+| `10-progress-running.png` | A transfer in progress, with Cancel (P3-07) |
+| `11-progress-complete.png` | Finished transfer, with the review tools |
+| `12-verification-result.png` | Integrity check after a clean transfer (P3-06, P3-09) |
+| `13-review-code-projects.png` | "Review Code Projects" |
+| `14-review-source-duplicates.png` | "Clean Source Duplicates" |
+| `15-history.png` | History with one run |
+| `16-history-integrity-check.png` | Integrity check started from History (P3-07) |
+| `17-finished-with-problems.png` | Transfer in which a code project was not copied (P3-05) |
+| `18-verification-after-problems.png` | Integrity check after that transfer (P3-06) |
+| `19-duplicates-scanning.png` | Duplicate scan in progress, with Cancel |
+| `20-duplicates-results.png` | Duplicate scan results |
+
+`audit_screenshots/pass3/evidence/` holds two more:
+- `p3-06-before-fix-verify-after-failed-project.png`: the old "100% safe to
+  delete" after a failed project, taken before the P3-06 fix.
+- `offline-welcome.png`: the welcome screen with the CDNs blocked
+  (Recommendation 1).
+
+#### Not verified, or only partly verified
+
+- **WebKit:** the app runs in WKWebView, but Santa blocks Playwright's
+  WebKit on this Mac, so the tests ran in Chromium only. `overflow: clip`
+  (P3-04) needs Safari 16 or later; older WebKit falls back to `hidden`,
+  where the preview footer is inside the card but not pinned.
+- **The real window:** pywebview was not started. The tests serve the same
+  Flask app to a browser at the window's opening size, 700 x 550. The
+  window can be resized (pywebview's default); other sizes were not
+  captured.
+- **Scale:** the screens were exercised with small synthetic data (up to
+  152 duplicate groups and a few History entries). Rendering the tens of
+  thousands of groups that 1 TB of duplicates could produce was not
+  measured.
+- **Offline:** only the welcome screen was captured offline. What the
+  other screens would show is read from the markup (Recommendation 1).
+- **Dark mode** was tested by adding the `dark` class, which the app itself
+  never does (Recommendation 2).
+- **Accessibility:** screen readers and keyboard use were not tested beyond
+  reading the markup (Recommendation 5).
+- **P3-06:** the result now says what the check covers. Whether
+  `verify_transfer` itself should check more (code projects, whole-file
+  hashes) is Recommendation 3, and was not changed.
+
+### For later passes
+
+- **Pass 4 (CLI and local API):**
+  - From pass 2: `/api/dup_reveal` passes any existing path to `open -R`,
+    and `/api/dup_empty_trash` accepts any `root_folder`.
+  - `/api/list_volumes` is never called by the UI.
+  - Third-party scripts from CDNs run in the page that holds the API token
+    (Recommendation 1). Any of them can call every endpoint, including
+    permanent delete.
+  - `/api/cancel` answers success, and adds "Cancellation requested" to the
+    log, when no run is active. Since P3-07 the UI no longer sends it then.
+  - `/api/open_finder` opens any existing folder, not only a destination.
+- **For the final review:**
+  - P3-05 and P3-06 changed what the backend returns (`run_summary` in
+    `/api/status`; `hashes_checked` and `hash_check_limit` from
+    `verify_transfer`). The CLI does not use them.
+  - The browser tests need Playwright (`requirements-dev.txt`) and internet
+    access for the CDNs. Without Playwright, unittest skips the 11 browser
+    test classes and runs only the template check, so `make test` reports
+    194 tests instead of 242 and still says OK. Offline, the browser tests
+    would fail on the console errors that the missing CDN scripts cause
+    (inferred from the offline capture; the suite was not run offline).
 
 ---
 
