@@ -829,6 +829,11 @@ class OrganizerAPI:
         self.cancelled = False
         self.log_cb(f"Scanning {folder_abs} for in-place duplicates (read-only)...")
 
+        # OrganizerAPI has no `categorizer` attribute; reading self.categorizer
+        # here raised AttributeError at the first subfolder, so the scan never
+        # completed on a real drive (audit P2-01).
+        categorizer = Categorizer(self.config_path)
+
         PACKAGE_BUNDLE_EXTS = (
             ".app", ".photoslibrary", ".photolibrary", ".aplibrary",
             ".fcpbundle", ".logicx", ".band", ".xcodeproj", ".xcworkspace",
@@ -860,7 +865,7 @@ class OrganizerAPI:
             items_set = set(unpruned_dirs) | set(files)
 
             # Never reach inside an intact code repository and delete internal files
-            if root != folder_abs and self.categorizer.is_project_root(root, items_set):
+            if root != folder_abs and categorizer.is_project_root(root, items_set):
                 dirs.clear()
                 continue
 

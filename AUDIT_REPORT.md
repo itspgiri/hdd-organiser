@@ -8,7 +8,7 @@ A separate reviewer checks all passes at the end.
 | Pass | Scope | Status |
 |------|-------|--------|
 | 1 | Data safety in the organize flow's backend | Complete |
-| 2 | Duplicates utility | Not started |
+| 2 | Duplicates utility | In progress |
 | 3 | Web UI | Not started |
 | 4 | CLI and local API | Not started |
 
@@ -547,3 +547,88 @@ happened in about 1 of 40 full-suite runs. If it happens, rerun.
   "complete" state. Only the log and history say "Finished with problems" /
   "Completed with errors". Consider showing a distinct warning state, and the
   new `failed_files` / `failed_projects` history fields.
+
+---
+
+## Pass 2: Duplicates utility
+
+### Scope
+
+In scope: the standalone duplicates utility's backend and its local API
+endpoints. That is `OrganizerAPI.find_duplicates_inplace` (the in-place scan,
+grouping and hashing, which copy is kept, and what the scan skips),
+`OrganizerAPI.trash_inplace_duplicates` (quarantine to `.Duplicates_Trash`
+and permanent delete), `OrganizerAPI.empty_duplicates_trash`, and the
+`/api/dup_scan_start`, `/api/dup_scan_status`, `/api/dup_scan_cancel`,
+`/api/dup_trash_inplace`, `/api/dup_empty_trash` and `/api/dup_reveal`
+routes in `src/app.py`. Also whether what the utility reports (space
+reclaimed, counts) matches what happened on disk.
+
+Out of scope (left to other passes): the organize flow (pass 1), the
+duplicates screen's HTML/JS and the rest of the UI (pass 3), the CLI and API
+auth (pass 4). The backend was still tested against requests the UI would
+not normally send (every copy selected, stale paths, paths outside the
+scanned folder, concurrent requests).
+
+### Guarantees tested
+
+- **G4.** No duplicates-utility operation deletes or quarantines the last
+  remaining copy of a file, including when every copy is selected, or when
+  files change between the scan and the delete.
+- **G5.** The duplicate scan writes nothing to the drive being scanned.
+- **G6.** On a volume with zero bytes free, the scan completes and permanent
+  delete actually frees space. Tested on real, completely full disk images,
+  one exFAT and one APFS.
+
+### Method
+
+- Read only what this scope needs: the three `OrganizerAPI` methods above,
+  the helpers they call in `src/file_ops.py` (`get_part_hash`,
+  `files_are_identical`, `_force_remove`, `_clear_immutable`), the skip lists
+  in `src/scanner.py`, `Categorizer.is_project_root`, and the duplicates
+  routes and scanner state in `src/app.py`. From `src/static/script.js`, only
+  the request each duplicates button sends was read, to know what the backend
+  receives.
+- Each fixed finding has an automated test on synthetic data in a private
+  temp folder, or on a small disk image that the test creates, attaches at a
+  mount point inside its own temp folder (never under `/Volumes`), and
+  detaches and deletes afterwards. Shared fixtures are in
+  `tests/pass2_helpers.py`.
+- Each fix is its own commit, together with a test that fails on `92ed5c1`
+  and passes with the fix. `make test` passes at every commit.
+- On `92ed5c1`, P2-01 makes every scan of a folder with a subfolder crash.
+  So that the tests for the other findings exercise the baseline's real
+  logic instead of stopping at P2-01, their helper (`make_api()`) sets the
+  missing attribute on the API object. The P2-01 tests do not.
+
+### Findings
+
+Same severity scale as pass 1: **Critical** means data loss is likely in
+normal use. **High** means data loss, or a broken guarantee, in a plausible
+scenario. **Medium** means misleading results that could lead the owner to
+delete data. **Low** means a narrow edge case or defence-in-depth.
+
+Findings are numbered in the order they were identified, not by severity.
+Commit hashes are listed in the summary table at the end of this section.
+
+#### P2-01 (High): the duplicate scan crashes on any folder that has a subfolder
+
+- **Location:** `src/api_organizer.py`, `OrganizerAPI.find_duplicates_inplace`.
+- **What happens:** to skip code projects, the scan calls
+  `self.categorizer.is_project_root(...)` for every folder below the scanned
+  one. `OrganizerAPI` has no `categorizer` attribute (the other methods build
+  a local `Categorizer`), so the first subfolder raises `AttributeError`. The
+  scan thread catches it and the status becomes `error` with the message
+  `'OrganizerAPI' object has no attribute 'categorizer'`. Only a folder with
+  no subfolders at all could be scanned, so the utility never worked on a
+  real drive, full or not (G6).
+- **Steps to reproduce:** create `A/x.jpg` and `B/x.jpg` with the same
+  content in a folder and scan it with the duplicates utility. The scan ends
+  in an error.
+- **Fix:** build a local `Categorizer(self.config_path)`, as the other
+  methods do.
+- **Status:** Fixed. Tests in `tests/test_pass2_scan_subfolders.py` (all
+  three fail on `92ed5c1`):
+  - `test_scan_finds_duplicates_in_subfolders`
+  - `test_scan_still_skips_code_projects` (the project check now runs)
+  - `test_scan_endpoint_completes` (through `/api/dup_scan_start`)
