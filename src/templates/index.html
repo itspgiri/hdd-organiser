@@ -4,238 +4,486 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Drive Organizer</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#4f46e5',
+                        primaryHover: '#4338ca',
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-    <main class="app-container">
+<body class="bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 min-h-screen flex items-center justify-center p-4 sm:p-8 antialiased">
+    
+    <main class="w-full max-w-3xl bg-white dark:bg-slate-800 shadow-xl dark:shadow-2xl rounded-2xl overflow-hidden ring-1 ring-slate-200 dark:ring-slate-700">
         <!-- TOP NAVIGATION HEADER -->
-        <nav class="nav-bar">
-            <button class="btn secondary nav-back-btn" id="nav-back-btn" onclick="navigateBack()" style="display: none;">
-                ◄ Back
+        <nav class="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/80 backdrop-blur-sm sticky top-0 z-10">
+            <button type="button" class="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors" id="nav-back-btn" onclick="navigateBack()" style="display: none;">
+                <i data-lucide="arrow-left" class="pointer-events-none w-4 h-4"></i> Back
             </button>
-            <div class="nav-breadcrumbs" id="nav-breadcrumbs">
-                <span class="crumb active" id="crumb-guide" onclick="showView('guide-view')">Welcome</span>
-                <span class="crumb-separator">›</span>
-                <span class="crumb" id="crumb-setup" onclick="showView('setup-view')">Setup</span>
-                <span class="crumb-separator">›</span>
-                <span class="crumb" id="crumb-progress">Preview & Run</span>
-                <span class="crumb-separator">›</span>
-                <span class="crumb" id="crumb-history" onclick="loadHistoryView()">📜 Past Runs</span>
+            <div class="flex items-center text-sm ml-auto" id="nav-breadcrumbs">
+                <span class="crumb active flex items-center gap-1" id="crumb-guide" onclick="showView('guide-view')">Welcome</span>
+                <span class="crumb-separator"><i data-lucide="chevron-right" class="pointer-events-none w-3.5 h-3.5"></i></span>
+                <span class="crumb flex items-center gap-1" id="crumb-setup" onclick="try { showView('setup-view'); } catch(e) { alert('Error: ' + e.message); }">Setup</span>
+                <span class="crumb-separator"><i data-lucide="chevron-right" class="pointer-events-none w-3.5 h-3.5"></i></span>
+                <span class="crumb flex items-center gap-1" id="crumb-progress">Preview & Run</span>
+                <span class="crumb-separator"><i data-lucide="chevron-right" class="pointer-events-none w-3.5 h-3.5"></i></span>
+                <span class="crumb flex items-center gap-1" id="crumb-history" onclick="loadHistoryView()"><i data-lucide="history" class="pointer-events-none w-3.5 h-3.5"></i> History</span>
+                <span class="crumb-separator"><i data-lucide="chevron-right" class="pointer-events-none w-3.5 h-3.5"></i></span>
+                <span class="crumb flex items-center gap-1" id="crumb-duplicates" onclick="try { showView('duplicates-view'); } catch(e) { alert('Error: ' + e.message); }"><i data-lucide="copy" class="pointer-events-none w-3.5 h-3.5"></i> Duplicates</span>
             </div>
         </nav>
 
-        <!-- GUIDE VIEW -->
-        <div id="guide-view" class="view active">
-            <div class="header-icon">🚀</div>
-            <h1>Welcome to Drive Organizer</h1>
-            <p class="subtitle">Effortlessly sort your messy folders safely.</p>
-            
-            <div class="guide-steps">
-                <div class="step">
-                    <span class="step-num">1</span>
-                    <p>Select your messy <strong>Source Folder</strong>.</p>
+        <div class="p-6 sm:p-10 relative">
+            <!-- GUIDE VIEW -->
+            <div id="guide-view" class="view active">
+                <div class="text-center mb-10">
+                    <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 mb-5 shadow-inner">
+                        <i data-lucide="hard-drive" class="pointer-events-none w-8 h-8"></i>
+                    </div>
+                    <h1 class="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-2">Drive Organizer</h1>
+                    <p class="text-slate-500 dark:text-slate-400 text-lg">Effortlessly sort your messy folders safely.</p>
                 </div>
-                <div class="step">
-                    <span class="step-num">2</span>
-                    <p>Select your <strong>Destination Folder</strong>.</p>
+                
+                <div class="grid gap-3 mb-8">
+                    <div class="flex items-start gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-700/30 border border-slate-100 dark:border-slate-700 shadow-sm transition hover:shadow-md">
+                        <span class="flex items-center justify-center w-8 h-8 rounded-full bg-indigo-600 text-white font-bold text-sm shrink-0 shadow-md">1</span>
+                        <p class="text-slate-700 dark:text-slate-300 mt-1">Select your messy <strong>Source Folder</strong>.</p>
+                    </div>
+                    <div class="flex items-start gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-700/30 border border-slate-100 dark:border-slate-700 shadow-sm transition hover:shadow-md">
+                        <span class="flex items-center justify-center w-8 h-8 rounded-full bg-indigo-600 text-white font-bold text-sm shrink-0 shadow-md">2</span>
+                        <p class="text-slate-700 dark:text-slate-300 mt-1">Select your <strong>Destination Folder</strong>.</p>
+                    </div>
+                    <div class="flex items-start gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-700/30 border border-slate-100 dark:border-slate-700 shadow-sm transition hover:shadow-md">
+                        <span class="flex items-center justify-center w-8 h-8 rounded-full bg-indigo-600 text-white font-bold text-sm shrink-0 shadow-md">3</span>
+                        <p class="text-slate-700 dark:text-slate-300 mt-1">Click Organize and let the magic happen!</p>
+                    </div>
                 </div>
-                <div class="step">
-                    <span class="step-num">3</span>
-                    <p>Click Organize and let the magic happen!</p>
+                
+                <div class="flex items-start gap-3 p-4 mb-8 text-sm text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200/50 dark:border-amber-800/50">
+                    <i data-lucide="info" class="pointer-events-none w-5 h-5 shrink-0 mt-0.5 opacity-80"></i>
+                    <p><strong>Note:</strong> Designed specifically for macOS. Utilizing APFS clonefile for zero-space copies and native Finder tags.</p>
                 </div>
-            </div>
-            
-            <div class="disclaimer-banner">
-                <p><strong>Note:</strong> Designed specifically for macOS. Utilizing APFS clonefile for zero-space copies and native Finder tags.</p>
-            </div>
-            
-            <button class="btn primary full-width" onclick="showView('setup-view')">Get Started</button>
-            <div style="margin-top: 10px;">
-                <button class="btn secondary full-width" onclick="loadHistoryView()">📜 View Past Runs & Audit Reports</button>
-            </div>
-        </div>
-
-        <!-- HISTORY VIEW -->
-        <div id="history-view" class="view hidden">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h2>📜 Past Runs & Audit Reports</h2>
-                <button class="btn secondary" style="font-size: 11px; padding: 4px 10px;" onclick="clearHistoryLog()">🗑️ Clear History</button>
-            </div>
-            <p class="small-hint" style="margin-left: 0; margin-bottom: 15px;">Access details and download CSV audit reports for all your past organization runs.</p>
-
-            <div id="history-list-container" style="max-height: 380px; overflow-y: auto;">
-                <div>Loading history...</div>
-            </div>
-
-            <div class="actions" style="margin-top: 20px;">
-                <button class="btn secondary full-width" onclick="showView('setup-view')">◄ Return to Setup</button>
-            </div>
-        </div>
-
-
-        <!-- SETUP VIEW -->
-        <div id="setup-view" class="view hidden">
-            <h2>Organization Setup</h2>
-            
-            <div class="form-group" style="margin-top: 20px;">
-                <label>1. Select Messy Source Folder(s) to Sort</label>
-                <div class="input-row">
-                    <input type="text" id="source-path" onchange="onSourceInputChanged()" placeholder="Choose folders or enter multiple paths separated by commas...">
-                    <button class="btn secondary" onclick="selectFolder('source')">Browse</button>
-                </div>
-                <p class="small-hint">💡 Tip: You can select multiple source folders or separate multiple paths with commas!</p>
-            </div>
-
-            <div class="form-group">
-                <label>2. Destination Strategy</label>
-                <div class="option-cards">
-                    <label class="option-card active" id="card-new" onclick="selectDestMode('new')">
-                        <input type="radio" name="dest-mode" value="new" checked style="display:none;">
-                        <div class="option-title">✨ Option A: Brand New Sorted Folder</div>
-                        <div class="option-desc">Organize into a fresh destination folder on your drive.</div>
-                    </label>
-                    <label class="option-card" id="card-merge" onclick="selectDestMode('merge')">
-                        <input type="radio" name="dest-mode" value="merge" style="display:none;">
-                        <div class="option-title">📂 Option B: Merge into Already Sorted Folder</div>
-                        <div class="option-desc">Add files to an existing organized folder. Deduplication prevents duplicates.</div>
-                    </label>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label>3. Select Destination Folder</label>
-                <div class="input-row">
-                    <input type="text" id="dest-path" placeholder="Choose or enter destination folder...">
-                    <button class="btn secondary" onclick="selectFolder('dest')">Browse</button>
-                </div>
-            </div>
-
-            <div class="form-group mode-box">
-                <label class="checkbox-label">
-                    <input type="checkbox" id="preview-mode" checked>
-                    <span><strong>Run in Dry-Run / Preview Mode first (Recommended)</strong></span>
-                </label>
-                <p class="small-hint">Scans drive, calculates space, and shows duplicate count without moving any files.</p>
-            </div>
-
-            <div class="actions">
-                <button class="btn secondary" onclick="showView('guide-view')" style="width: 30%;">Back</button>
-                <button class="btn primary" id="start-btn" onclick="startOrganizing()" style="width: 65%; float: right;">Start Organizing</button>
-            </div>
-            <div style="margin-top: 15px; text-align: center;">
-                <button class="btn secondary" style="font-size: 12px; width: 100%;" onclick="loadHistoryView()">📜 View Past Runs & Audit Reports</button>
-            </div>
-        </div>
-
-
-        <!-- PROGRESS VIEW -->
-        <div id="progress-view" class="view hidden">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                <h2 id="status-heading" style="margin: 0;">Organizing Files...</h2>
-                <button class="btn danger-btn" id="cancel-btn" onclick="cancelCurrentOperation()" style="font-size: 11px; padding: 4px 12px; background: #e74c3c; color: white; border: none; border-radius: 6px; cursor: pointer;">
-                    ⛔ Cancel Operation
-                </button>
-            </div>
-
-            <div class="progress-container">
-                <div class="progress-bar-bg">
-                    <div class="progress-bar-fill" id="progress-fill"></div>
-                </div>
-                <div class="progress-text">
-                    <span id="progress-percentage">0%</span>
-                    <span id="progress-count">0 / 0</span>
-                </div>
-            </div>
-            <p id="current-message" class="current-message">Initializing...</p>
-            
-            <div id="confirm-box" class="confirm-box hidden" style="margin-top: 10px; margin-bottom: 15px;">
-                <div class="confirm-title">📊 Dry-Run Scan Results Summary</div>
-                <div id="preview-dashboard" class="preview-dashboard" style="margin-top: 10px;"></div>
-                <div class="actions sticky-actions" style="margin-top: 15px; display: flex; gap: 10px;">
-                    <button class="btn secondary" onclick="resetToSetup()" style="flex: 1;">◄ Back to Setup</button>
-                    <button class="btn success-btn" id="confirm-go-btn" onclick="executeFullCopy()" style="flex: 2;">🚀 YES, Execute Full Transfer!</button>
-                </div>
-            </div>
-
-            <input type="text" id="log-filter" placeholder="🔍 Filter live activity logs..." onkeyup="filterLogs()" style="font-size: 12px; padding: 6px 12px; margin-bottom: 8px; width: 100%; border-radius: 6px;">
-
-            <div class="log-container" id="log-container" style="max-height: 120px; overflow-y: auto;">
-                <div class="log-content" id="log-content"></div>
-            </div>
-
-
-            <!-- INSPECT CODE PROJECT MODAL -->
-            <div id="inspect-modal" class="inspect-modal hidden" style="margin-top: 15px;">
-                <div class="inspect-header">
-                    <strong id="inspect-folder-title">Folder Inspection</strong>
-                    <button class="btn secondary" style="font-size: 11px; padding: 2px 8px; float: right;" onclick="closeInspectModal()">✕ Close</button>
-                </div>
-                <div id="inspect-files-list" class="inspect-files-list"></div>
-                <div class="inspect-actions" style="margin-top: 10px;">
-                    <button class="btn primary" id="toggle-exclude-btn" onclick="toggleExcludeCurrentProject()" style="width: 100%; font-size: 12px;">
-                        ⚡ Sort This as Regular Files (Not a Code Project)
+                
+                <div class="flex flex-col gap-3">
+                    <button type="button" class="w-full flex justify-center items-center gap-2 py-3.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-md transition-all focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 active:scale-[0.98]" onclick="try { showView('setup-view'); } catch(e) { alert('Error: ' + e.message); }">
+                        Get Started <i data-lucide="arrow-right" class="pointer-events-none w-4 h-4"></i>
+                    </button>
+                    <button type="button" class="w-full flex justify-center items-center gap-2 py-3.5 px-4 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium rounded-xl border border-slate-200 dark:border-slate-600 shadow-sm transition-all active:scale-[0.98]" onclick="loadHistoryView()">
+                        <i data-lucide="history" class="pointer-events-none w-4 h-4"></i> View Past Runs & Audit Reports
+                    </button>
+                    <button type="button" class="w-full flex justify-center items-center gap-2 py-3.5 px-4 bg-amber-50 dark:bg-amber-900/30 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-400 font-medium rounded-xl border border-amber-200 dark:border-amber-800 shadow-sm transition-all active:scale-[0.98]" onclick="try { showView('duplicates-view'); } catch(e) { alert('Error: ' + e.message); }">
+                        <i data-lucide="copy" class="pointer-events-none w-4 h-4"></i> Standalone Duplicates Utility
                     </button>
                 </div>
             </div>
 
-            <!-- INSPECT GARBAGE FILES MODAL -->
-            <div id="garbage-modal" class="inspect-modal hidden" style="margin-top: 15px;">
-                <div class="inspect-header">
-                    <strong>🗑️ Ignored System & Garbage Files Audit Report</strong>
-                    <button class="btn secondary" style="font-size: 11px; padding: 2px 8px; float: right;" onclick="closeGarbageModal()">✕ Close</button>
+            <!-- DUPLICATES VIEW -->
+            <div id="duplicates-view" class="view">
+                <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-2 flex items-center gap-2">
+                    <i data-lucide="copy" class="pointer-events-none w-6 h-6 text-amber-500"></i> Standalone Duplicates Utility
+                </h2>
+                <p class="text-sm text-slate-500 dark:text-slate-400 mb-6">Find and remove duplicates in-place without needing extra space or a destination drive.</p>
+                
+                <div class="space-y-6">
+                    <div class="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/30">
+                        <label class="flex items-center gap-2 text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3">
+                            <span class="flex items-center justify-center w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-xs">1</span> 
+                            Select Folder to Scan
+                        </label>
+                        <div class="flex gap-2">
+                            <div class="relative flex-grow">
+                                <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                                    <i data-lucide="folder-search" class="pointer-events-none w-4 h-4 text-slate-400"></i>
+                                </div>
+                                <input type="text" id="dup-source-path" placeholder="Folder path..." class="block w-full pl-10 pr-3 py-2.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-slate-900 dark:text-slate-100 transition-shadow">
+                            </div>
+                            <button type="button" class="px-4 py-2.5 bg-white dark:bg-slate-700 hover:bg-slate-50 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium rounded-lg border border-slate-300 dark:border-slate-600 transition-colors shrink-0 flex items-center gap-2 shadow-sm" onclick="selectDupFolder()">
+                                <i data-lucide="folder-open" class="pointer-events-none w-4 h-4"></i> Browse
+                            </button>
+                        </div>
+                    </div>
                 </div>
-                <div style="font-size: 11px; opacity: 0.85; margin-top: 8px; margin-bottom: 10px; background: rgba(255,255,255,0.05); padding: 8px; border-radius: 6px;">
-                    💡 <strong>Why so many?</strong> When files are copied to an external drive (exFAT/FAT32/NTFS), macOS automatically creates a hidden <code>._filename</code> AppleDouble metadata file for <em>every single image & video</em>. Drive Organizer safely ignores these <code>._*</code> sidecars so your destination drive stays 100% clean.
+
+                <div class="mt-6 flex flex-wrap gap-3">
+                    <button type="button" class="flex-none px-6 py-3 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium rounded-xl border border-slate-200 dark:border-slate-600 shadow-sm transition-all text-center" onclick="showView('guide-view')">Back</button>
+                    <button type="button" class="flex-grow flex justify-center items-center gap-2 py-3 px-6 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-xl shadow-md transition-all focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 active:scale-[0.98]" id="start-dup-scan-btn" onclick="startDuplicateScan()">
+                        <i data-lucide="search" class="pointer-events-none w-4 h-4"></i> Scan for Duplicates
+                    </button>
+                    <button type="button" class="flex-none px-4 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-900/30 text-slate-700 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm transition-all flex items-center gap-1.5" id="empty-dup-trash-btn" onclick="emptyDuplicatesTrash()">
+                        <i data-lucide="trash" class="pointer-events-none w-3.5 h-3.5"></i> Empty .Duplicates_Trash
+                    </button>
                 </div>
-                <div id="garbage-breakdown-list" style="font-size: 12px; margin-bottom: 10px;"></div>
-                <div style="font-size: 11px; font-weight: bold; margin-bottom: 4px;">Sample Paths of Ignored System Files:</div>
-                <div id="garbage-samples-list" class="inspect-files-list" style="max-height: 120px;"></div>
+
+                <!-- SCAN PROGRESS -->
+                <div id="dup-progress-container" class="hidden mt-6 bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-100 dark:border-slate-700">
+                    <div class="flex justify-between items-center mb-2">
+                        <div class="text-sm font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                            <i class="pointer-events-none w-4 h-4 text-amber-500 animate-spin" data-lucide="loader" id="dup-status-spinner"></i> Scanning...
+                        </div>
+                        <div class="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                            <span id="dup-progress-percentage">0%</span>
+                        </div>
+                    </div>
+                    <div class="h-2 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden shadow-inner mb-3">
+                        <div class="h-full bg-amber-500 rounded-full transition-all duration-300 ease-out" id="dup-progress-fill" style="width: 0%"></div>
+                    </div>
+                    <div class="flex justify-between">
+                        <p id="dup-current-message" class="text-xs text-slate-500 dark:text-slate-400 truncate font-medium max-w-[80%]">Initializing...</p>
+                        <button type="button" class="text-xs text-rose-500 hover:text-rose-600" onclick="cancelDuplicateScan()">Cancel</button>
+                    </div>
+                </div>
+
+                <!-- SCAN RESULTS -->
+                <div id="dup-results-container" class="hidden mt-6">
+                    <!-- Summary Stat Cards -->
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3.5 text-center shadow-sm">
+                            <div class="text-2xl font-extrabold text-amber-600 dark:text-amber-400" id="dup-stat-groups">0</div>
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Duplicate Groups</div>
+                        </div>
+                        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3.5 text-center shadow-sm">
+                            <div class="text-2xl font-extrabold text-indigo-600 dark:text-indigo-400" id="dup-stat-files">0</div>
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Selected Duplicates</div>
+                        </div>
+                        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3.5 text-center shadow-sm">
+                            <div class="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400" id="dup-stat-space">0 MB</div>
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Space to Reclaim</div>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-wrap justify-between items-center gap-3 mb-3 pb-3 border-b border-slate-200 dark:border-slate-700">
+                        <div>
+                            <h3 class="text-lg font-bold text-slate-800 dark:text-slate-200">Duplicate Groups</h3>
+                            <p class="text-xs text-slate-500 dark:text-slate-400" id="dup-results-summary">Found 0 duplicates.</p>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <button type="button" id="dup-quarantine-btn" class="flex justify-center items-center gap-1.5 py-2 px-3.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all active:scale-[0.98]" onclick="trashSelectedDuplicates(false)">
+                                <i data-lucide="folder-input" class="pointer-events-none w-3.5 h-3.5"></i> <span id="dup-quarantine-btn-label">Quarantine to .Duplicates_Trash</span>
+                            </button>
+                            <button type="button" id="dup-perm-delete-btn" class="flex justify-center items-center gap-1.5 py-2 px-4 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg shadow-md transition-all active:scale-[0.98]" onclick="trashSelectedDuplicates(true)">
+                                <i data-lucide="trash-2" class="pointer-events-none w-3.5 h-3.5"></i> <span id="dup-perm-delete-btn-label">Permanently Delete Selected (Free Space Now)</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Search, Filter & Bulk Selection Toolbar -->
+                    <div class="flex flex-wrap items-center justify-between gap-2 mb-3 bg-slate-50 dark:bg-slate-800/40 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
+                        <div class="relative flex-grow min-w-[200px]">
+                            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <i data-lucide="search" class="pointer-events-none w-3.5 h-3.5 text-slate-400"></i>
+                            </div>
+                            <input type="text" id="dup-search-input" placeholder="Filter duplicates by filename or folder path..." oninput="onDupFilterChanged()" class="block w-full pl-8 pr-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-amber-500">
+                        </div>
+                        <select id="dup-type-filter" onchange="onDupFilterChanged()" class="px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500">
+                            <option value="all">All File Types</option>
+                            <option value="large">Large Files (&gt; 50 MB)</option>
+                            <option value="video">Videos</option>
+                            <option value="photo">Photos &amp; Images</option>
+                            <option value="archive">Archives (.zip, .rar, .dmg)</option>
+                            <option value="doc">Documents &amp; Audio</option>
+                        </select>
+                        <div class="flex gap-1.5">
+                            <button type="button" onclick="selectAllDuplicates(true)" class="px-2.5 py-1.5 text-[11px] font-semibold bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm transition-all">
+                                ☑ Auto-Select Redundant
+                            </button>
+                            <button type="button" onclick="selectAllDuplicates(false)" class="px-2.5 py-1.5 text-[11px] font-semibold bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm transition-all">
+                                ☐ Deselect All
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="text-xs text-amber-800 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 p-3 rounded-xl border border-amber-200/50 dark:border-amber-800/50 mb-4 leading-relaxed flex gap-2 items-start">
+                        <i data-lucide="shield-check" class="pointer-events-none w-4 h-4 shrink-0 mt-0.5"></i> 
+                        <div>
+                            <strong>100% Full-Drive Safe:</strong> Every group keeps at least 1 verified <strong>Original</strong> copy untouched (you can swap which copy is kept by unchecking it and checking the other).
+                            Use <strong>Permanently Delete</strong> to reclaim disk space immediately on a full drive, or <strong>Quarantine</strong> to move copies into <code>.Duplicates_Trash</code> first.
+                        </div>
+                    </div>
+
+                    <div id="dup-groups-list" class="space-y-4 max-h-[55vh] overflow-y-auto pr-2">
+                        <!-- Filled by JS -->
+                    </div>
+                </div>
             </div>
 
-            <!-- INSPECT CATEGORY FILES MODAL -->
-            <div id="category-modal" class="inspect-modal hidden" style="margin-top: 15px;">
-                <div class="inspect-header">
-                    <strong id="category-modal-title">Category File Preview</strong>
-                    <button class="btn secondary" style="font-size: 11px; padding: 2px 8px; float: right;" onclick="closeCategoryModal()">✕ Close</button>
+            <!-- HISTORY VIEW -->
+            <div id="history-view" class="view">
+                <div class="flex justify-between items-center mb-2">
+                    <h2 class="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <i data-lucide="clock-4" class="pointer-events-none w-6 h-6 text-indigo-500"></i> Past Runs
+                    </h2>
+                    <button type="button" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-rose-50 hover:bg-rose-100 dark:bg-rose-900/20 dark:hover:bg-rose-900/40 text-rose-600 dark:text-rose-400 rounded-lg transition-colors border border-rose-100 dark:border-rose-900/50" onclick="clearHistoryLog()">
+                        <i data-lucide="trash-2" class="pointer-events-none w-3.5 h-3.5"></i> Clear History
+                    </button>
                 </div>
-                <div id="category-modal-subtitle" style="font-size: 11px; opacity: 0.85; margin-top: 4px; margin-bottom: 8px;"></div>
-                <div id="category-files-list" class="inspect-files-list" style="max-height: 180px;"></div>
+                <p class="text-sm text-slate-500 dark:text-slate-400 mb-6">Access details and download CSV audit reports for all your past organization runs.</p>
+
+                <div id="history-list-container" class="max-h-96 overflow-y-auto pr-2 space-y-3">
+                    <div class="text-slate-500 flex items-center justify-center py-12">
+                        <i data-lucide="loader-2" class="pointer-events-none w-6 h-6 animate-spin mr-2 text-indigo-500"></i> Loading history...
+                    </div>
+                </div>
+
+                <div class="mt-8 pt-6 border-t border-slate-100 dark:border-slate-700">
+                    <button type="button" class="w-full flex justify-center items-center gap-2 py-3 px-4 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium rounded-xl transition-all" onclick="try { showView('setup-view'); } catch(e) { alert('Error: ' + e.message); }">
+                        <i data-lucide="arrow-left" class="pointer-events-none w-4 h-4"></i> Return to Setup
+                    </button>
+                </div>
             </div>
 
+            <!-- SETUP VIEW -->
+            <div id="setup-view" class="view">
+                <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-6">Organization Setup</h2>
+                
+                <div class="space-y-6">
+                    <!-- Step 1 -->
+                    <div class="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/30">
+                        <label class="flex items-center gap-2 text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3">
+                            <span class="flex items-center justify-center w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-xs">1</span> 
+                            Select Messy Source Folder(s)
+                        </label>
+                        <div class="flex gap-2">
+                            <div class="relative flex-grow">
+                                <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                                    <i data-lucide="folder-search" class="pointer-events-none w-4 h-4 text-slate-400"></i>
+                                </div>
+                                <input type="text" id="source-path" onchange="onSourceInputChanged()" placeholder="Paths separated by commas..." class="block w-full pl-10 pr-3 py-2.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-slate-900 dark:text-slate-100 transition-shadow">
+                            </div>
+                            <button type="button" class="px-4 py-2.5 bg-white dark:bg-slate-700 hover:bg-slate-50 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium rounded-lg border border-slate-300 dark:border-slate-600 transition-colors shrink-0 flex items-center gap-2 shadow-sm" onclick="selectFolder('source')">
+                                <i data-lucide="folder-open" class="pointer-events-none w-4 h-4"></i> Browse
+                            </button>
+                        </div>
+                        <p class="mt-2.5 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5"><i data-lucide="lightbulb" class="pointer-events-none w-3.5 h-3.5 text-amber-500"></i> Tip: You can select multiple source folders or separate multiple paths with commas!</p>
+                    </div>
 
-            <!-- POST-TRANSFER REVIEW TOOLS -->
+                    <!-- Step 2 -->
+                    <div class="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/30">
+                        <label class="flex items-center gap-2 text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3">
+                            <span class="flex items-center justify-center w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-xs">2</span> 
+                            Destination Strategy
+                        </label>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <label class="option-card active cursor-pointer rounded-xl p-4 flex gap-3 bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-700" id="card-new" onclick="selectDestMode('new')">
+                                <input type="radio" name="dest-mode" value="new" checked style="display:none;">
+                                <div class="mt-0.5"><i data-lucide="sparkles" class="pointer-events-none w-5 h-5 text-indigo-500"></i></div>
+                                <div>
+                                    <div class="font-semibold text-slate-900 dark:text-white text-sm mb-1">Brand New Sorted Folder</div>
+                                    <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">Organize into a fresh destination folder on your drive.</div>
+                                </div>
+                            </label>
+                            <label class="option-card cursor-pointer rounded-xl p-4 flex gap-3 bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-700" id="card-merge" onclick="selectDestMode('merge')">
+                                <input type="radio" name="dest-mode" value="merge" style="display:none;">
+                                <div class="mt-0.5"><i data-lucide="folder-git-2" class="pointer-events-none w-5 h-5 text-indigo-500"></i></div>
+                                <div>
+                                    <div class="font-semibold text-slate-900 dark:text-white text-sm mb-1">Merge into Sorted Folder</div>
+                                    <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">Add files to an existing folder. Prevents duplicates.</div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
 
-            <div id="review-panel" class="review-panel hidden" style="margin-top: 20px;">
-                <h3>🛠️ Post-Organization Review & Tools</h3>
-                <p class="small-hint" style="margin-left: 0; margin-bottom: 12px;">Refine your organized folders or clean up duplicate files on your source drive.</p>
+                    <!-- Step 3 -->
+                    <div class="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/30">
+                        <label class="flex items-center gap-2 text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3">
+                            <span class="flex items-center justify-center w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-xs">3</span> 
+                            Select Destination Folder
+                        </label>
+                        <div class="flex gap-2">
+                            <div class="relative flex-grow">
+                                <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                                    <i data-lucide="folder-down" class="pointer-events-none w-4 h-4 text-slate-400"></i>
+                                </div>
+                                <input type="text" id="dest-path" placeholder="Destination folder path..." class="block w-full pl-10 pr-3 py-2.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-slate-900 dark:text-slate-100 transition-shadow">
+                            </div>
+                            <button type="button" class="px-4 py-2.5 bg-white dark:bg-slate-700 hover:bg-slate-50 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium rounded-lg border border-slate-300 dark:border-slate-600 transition-colors shrink-0 flex items-center gap-2 shadow-sm" onclick="selectFolder('dest')">
+                                <i data-lucide="folder-open" class="pointer-events-none w-4 h-4"></i> Browse
+                            </button>
+                        </div>
+                    </div>
 
-                <div class="review-grid">
-                    <button class="btn secondary" onclick="loadProjectReview()">🔍 Review Code Projects & Dissolve</button>
-                    <button class="btn secondary" onclick="loadDuplicateCleaner()">🗑️ Clean Source Duplicates</button>
+                    <!-- Options -->
+                    <div class="p-4 bg-emerald-50/70 dark:bg-emerald-900/10 border border-emerald-200/80 dark:border-emerald-800/40 rounded-xl">
+                        <label class="flex items-start gap-3 cursor-pointer group">
+                            <div class="flex items-center h-5 mt-0.5">
+                                <input type="checkbox" id="preview-mode" checked class="w-4 h-4 text-emerald-600 bg-white border-emerald-300 rounded focus:ring-emerald-500 dark:focus:ring-emerald-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600 cursor-pointer">
+                            </div>
+                            <div class="text-sm">
+                                <span class="font-semibold text-emerald-900 dark:text-emerald-400 group-hover:text-emerald-700 transition-colors">Run in Dry-Run / Preview Mode first (Recommended)</span>
+                                <p class="text-emerald-700/70 dark:text-emerald-400/70 text-xs mt-1">Scans drive, calculates space, and shows duplicate count without moving any files.</p>
+                            </div>
+                        </label>
+                    </div>
                 </div>
 
-                <div class="review-grid" style="margin-top: 10px;">
-                    <button class="btn primary" onclick="openDestinationInFinder()">📂 Open Destination Folder in Finder</button>
-                    <button class="btn secondary" onclick="downloadAuditReport()">📊 Export CSV Audit Log</button>
+                <div class="mt-8 flex flex-col-reverse sm:flex-row gap-3">
+                    <button type="button" class="flex-none px-6 py-3 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium rounded-xl border border-slate-200 dark:border-slate-600 shadow-sm transition-all text-center" onclick="showView('guide-view')">Back</button>
+                    <button type="button" class="flex-grow flex justify-center items-center gap-2 py-3 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-md transition-all focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 active:scale-[0.98]" id="start-btn" onclick="startOrganizing()">
+                        <i data-lucide="play" class="pointer-events-none w-4 h-4"></i> Start Organizing
+                    </button>
                 </div>
-
-                <div class="review-grid" style="margin-top: 10px;">
-                    <button class="btn success-btn" style="grid-column: span 2;" onclick="runVerificationChecker()">✅ Run Integrity Verification Checker</button>
-                </div>
-
-                <div id="review-content-area" class="review-content-area hidden" style="margin-top: 15px;"></div>
             </div>
 
-            <div class="actions" id="default-actions" style="margin-top: 20px;">
-                <button class="btn secondary full-width" id="done-btn" onclick="resetToSetup()" disabled>Return to Setup</button>
+            <!-- PROGRESS VIEW -->
+            <div id="progress-view" class="view">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 id="status-heading" class="text-2xl font-bold text-slate-900 dark:text-white m-0 flex items-center gap-2">
+                        <i class="pointer-events-none" data-lucide="loader" class="w-6 h-6 text-indigo-500 animate-spin" id="status-spinner"></i> Organizing Files...
+                    </h2>
+                    <button type="button" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-rose-200 dark:border-rose-900 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg transition-colors shadow-sm" id="cancel-btn" onclick="cancelCurrentOperation()">
+                        <i data-lucide="x-circle" class="pointer-events-none w-4 h-4"></i> Cancel
+                    </button>
+                </div>
+
+                <div class="mb-5 bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-100 dark:border-slate-700">
+                    <div class="flex justify-between text-xs font-semibold text-slate-600 dark:text-slate-300 mb-2">
+                        <span id="progress-percentage">0%</span>
+                        <span id="progress-count">0 / 0</span>
+                    </div>
+                    <div class="h-3 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden shadow-inner mb-3">
+                        <div class="h-full bg-indigo-600 rounded-full transition-all duration-300 ease-out" id="progress-fill" style="width: 0%"></div>
+                    </div>
+                    <p id="current-message" class="text-sm text-slate-500 dark:text-slate-400 truncate font-medium">Initializing...</p>
+                </div>
+                
+                <!-- Logs -->
+                <div class="bg-slate-900 rounded-xl overflow-hidden shadow-inner border border-slate-800 mt-2">
+                    <div class="border-b border-slate-800 bg-slate-800/50 px-3 py-2 flex items-center gap-2">
+                        <i data-lucide="terminal" class="pointer-events-none w-4 h-4 text-slate-400"></i>
+                        <input type="text" id="log-filter" placeholder="Filter live logs..." onkeyup="filterLogs()" class="bg-transparent border-none text-xs text-slate-300 placeholder-slate-500 focus:outline-none w-full font-mono">
+                    </div>
+                    <div class="p-3 max-h-56 overflow-y-auto" id="log-container">
+                        <div class="font-mono text-[11px] text-slate-300 leading-relaxed space-y-1 whitespace-pre-wrap" id="log-content"></div>
+                    </div>
+                </div>
+
+                <!-- INSPECT CODE PROJECT MODAL -->
+                <div id="inspect-modal" class="inspect-modal hidden fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm">
+                    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg p-5 flex flex-col max-h-[90vh]">
+                        <div class="flex justify-between items-center mb-4 pb-3 border-b border-slate-200 dark:border-slate-700">
+                            <strong id="inspect-folder-title" class="text-base text-slate-800 dark:text-slate-200 flex items-center gap-2"><i data-lucide="folder-search" class="pointer-events-none w-5 h-5 text-indigo-500"></i> Folder Inspection</strong>
+                            <button type="button" class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors p-1" onclick="closeInspectModal()"><i data-lucide="x" class="pointer-events-none w-5 h-5"></i></button>
+                        </div>
+                        <div id="inspect-files-list" class="inspect-files-list text-slate-600 dark:text-slate-400 overflow-y-auto flex-1 mb-4 bg-slate-50 dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-800"></div>
+                        <div class="pt-3 border-t border-slate-200 dark:border-slate-700">
+                            <button type="button" class="w-full py-3 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-400 text-sm font-semibold rounded-xl transition-colors border border-indigo-200 dark:border-indigo-800 flex justify-center items-center gap-2" id="toggle-exclude-btn" onclick="toggleExcludeCurrentProject()">
+                                <i data-lucide="zap" class="pointer-events-none w-4 h-4"></i> Sort This as Regular Files
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- INSPECT GARBAGE FILES MODAL -->
+                <div id="garbage-modal" class="inspect-modal hidden fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm">
+                    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg p-5 flex flex-col max-h-[90vh]">
+                        <div class="flex justify-between items-center mb-3 pb-3 border-b border-slate-200 dark:border-slate-700">
+                            <strong class="text-base text-slate-800 dark:text-slate-200 flex items-center gap-2"><i data-lucide="trash" class="pointer-events-none w-5 h-5 text-rose-500"></i> Ignored System & Garbage Files</strong>
+                            <button type="button" class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors p-1" onclick="closeGarbageModal()"><i data-lucide="x" class="pointer-events-none w-5 h-5"></i></button>
+                        </div>
+                        <div class="text-xs text-amber-800 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 p-3.5 rounded-xl border border-amber-200/50 dark:border-amber-800/50 mb-4 leading-relaxed flex gap-2 items-start">
+                            <i data-lucide="info" class="pointer-events-none w-4 h-4 shrink-0 mt-0.5"></i> 
+                            <div><strong>Why so many?</strong> When files are copied to an external drive (exFAT/FAT32/NTFS), macOS automatically creates a hidden <code>._filename</code> AppleDouble metadata file for every single image & video. Drive Organizer safely ignores these <code>._*</code> sidecars so your destination drive stays 100% clean.</div>
+                        </div>
+                        <div id="garbage-breakdown-list" class="text-sm text-slate-700 dark:text-slate-300 mb-4 grid grid-cols-2 gap-3 bg-slate-50 dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-800"></div>
+                        <div class="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Sample Paths:</div>
+                        <div id="garbage-samples-list" class="inspect-files-list text-slate-600 dark:text-slate-400 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-800"></div>
+                    </div>
+                </div>
+
+                <!-- INSPECT CATEGORY FILES MODAL -->
+                <div id="category-modal" class="inspect-modal hidden fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm">
+                    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg p-5 flex flex-col max-h-[90vh]">
+                        <div class="flex justify-between items-start mb-4 pb-3 border-b border-slate-200 dark:border-slate-700">
+                            <div>
+                                <strong id="category-modal-title" class="text-lg text-slate-800 dark:text-slate-200 flex items-center gap-2 mb-1">Category File Preview</strong>
+                                <div id="category-modal-subtitle" class="text-xs text-slate-500 dark:text-slate-400"></div>
+                            </div>
+                            <button type="button" class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors p-1 bg-slate-100 dark:bg-slate-700 rounded-lg" onclick="closeCategoryModal()"><i data-lucide="x" class="pointer-events-none w-5 h-5"></i></button>
+                        </div>
+                        <div id="category-files-list" class="inspect-files-list text-slate-600 dark:text-slate-400 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900 rounded-xl p-4 border border-slate-100 dark:border-slate-800 text-xs leading-relaxed space-y-2"></div>
+                    </div>
+                </div>
+
+                <!-- POST-TRANSFER REVIEW TOOLS -->
+                <div id="review-panel" class="review-panel hidden mt-6 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+                    <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 mb-1 flex items-center gap-2"><i data-lucide="wrench" class="pointer-events-none w-4 h-4 text-slate-500"></i> Post-Organization Review & Tools</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mb-4">Refine your organized folders or clean up duplicate files on your source drive.</p>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                        <button type="button" class="flex items-center justify-center gap-2 py-2.5 px-4 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm transition-all" onclick="loadProjectReview()">
+                            <i data-lucide="folder-search" class="pointer-events-none w-4 h-4"></i> Review Code Projects
+                        </button>
+                        <button type="button" class="flex items-center justify-center gap-2 py-2.5 px-4 bg-white dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-900/20 text-rose-600 dark:text-rose-400 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm transition-all" onclick="loadDuplicateCleaner()">
+                            <i data-lucide="trash-2" class="pointer-events-none w-4 h-4"></i> Clean Source Duplicates
+                        </button>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                        <button type="button" class="flex items-center justify-center gap-2 py-2.5 px-4 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-400 text-xs font-medium rounded-lg border border-indigo-200 dark:border-indigo-800 shadow-sm transition-all" onclick="openDestinationInFinder()">
+                            <i data-lucide="external-link" class="pointer-events-none w-4 h-4"></i> Open in Finder
+                        </button>
+                        <button type="button" class="flex items-center justify-center gap-2 py-2.5 px-4 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-600 shadow-sm transition-all" onclick="downloadAuditReport()">
+                            <i data-lucide="download" class="pointer-events-none w-4 h-4"></i> Export CSV Audit Log
+                        </button>
+                    </div>
+
+                    <div class="mt-3">
+                        <button type="button" class="w-full flex items-center justify-center gap-2 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all" onclick="runVerificationChecker()">
+                            <i data-lucide="check-shield" class="pointer-events-none w-4 h-4"></i> Run Integrity Verification Checker
+                        </button>
+                    </div>
+
+                    <div id="review-content-area" class="review-content-area hidden mt-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-3 max-h-60 overflow-y-auto"></div>
+                </div>
+
+                <div class="mt-8 border-t border-slate-100 dark:border-slate-700 pt-5" id="default-actions">
+                    <button type="button" class="w-full flex justify-center items-center gap-2 py-3 px-4 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed" id="done-btn" onclick="resetToSetup()" disabled>
+                        <i data-lucide="rotate-ccw" class="pointer-events-none w-4 h-4"></i> Return to Setup
+                    </button>
+                </div>
             </div>
         </div>
+    
+            <!-- PREVIEW VIEW -->
+            <div id="preview-view" class="view hidden">
+                <div class="flex flex-col h-full min-h-[80vh]">
+                <div class="mb-6 flex flex-col sm:flex-row sm:justify-between sm:items-end gap-3">
+                    <div>
+                        <h2 class="text-2xl font-black text-slate-800 dark:text-white tracking-tight flex items-center gap-2">
+                            <i data-lucide="bar-chart-2" class="w-6 h-6 text-indigo-500"></i> Dry-Run Preview
+                        </h2>
+                        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Review how your files will be organized before moving anything.</p>
+                    </div>
+                </div>
+
+                <div class="flex-1 overflow-y-auto pr-2 pb-6 space-y-6" id="preview-dashboard-content">
+                    <!-- Dashboard content injected by JS -->
+                </div>
+
+                <!-- Fixed Action Footer -->
+                <div class="mt-auto p-4 bg-white dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 flex justify-end gap-3 sticky bottom-0 z-50 -mx-6 -mb-6 sm:-mx-10 sm:-mb-10 rounded-b-2xl">
+                    <button type="button" class="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium rounded-xl transition-all shadow-sm" onclick="resetToSetup()">Cancel & Edit Settings</button>
+                    <button type="button" class="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl shadow-md transition-all flex items-center gap-2" id="confirm-go-btn" onclick="executeFullCopy()">
+                        <i data-lucide="rocket" class="pointer-events-none w-5 h-5"></i> Execute Full Transfer
+                    </button>
+                </div>
+                </div>
+            </div>
+
     </main>
 
     <script>
-      // Injected fresh per launch by the Flask app. Wrapping fetch once here,
-      // before script.js loads, means every existing API call site picks up the
-      // auth token without needing to be touched individually.
+      // Injected fresh per launch by the Flask app
       window.API_TOKEN = "{{ api_token }}";
       (function () {
         const rawFetch = window.fetch.bind(window);
@@ -249,7 +497,20 @@
           return rawFetch(input, init);
         };
       })();
-    </script>
+      
+      
+      
+      // Initialize Lucide icons
+      document.addEventListener("DOMContentLoaded", function() {
+          try {
+              lucide.createIcons();
+          } catch (e) {
+              console.error(e);
+          }
+      });
+      // Also try immediately in case DOM is already ready
+      try { lucide.createIcons(); } catch(e) {}
+</script>
     <script src="/static/script.js"></script>
 </body>
 </html>

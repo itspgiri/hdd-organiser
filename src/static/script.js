@@ -79,7 +79,7 @@ function startPolling() {
 
                     if (lastWasPreview) {
                         lastPreviewSummary = data.preview_summary;
-                        document.getElementById('confirm-box').classList.remove('hidden');
+                        showView('preview-view');
                         renderPreviewDashboard(data.preview_summary);
                     } else {
                         document.getElementById('review-panel').classList.remove('hidden');
@@ -132,6 +132,10 @@ function showView(viewId) {
         const crumbHist = document.getElementById('crumb-history');
         if (crumbHist) crumbHist.classList.add('active');
     }
+    if (viewId === 'duplicates-view') {
+        const crumbDup = document.getElementById('crumb-duplicates');
+        if (crumbDup) crumbDup.classList.add('active');
+    }
 }
 
 function navigateBack() {
@@ -152,6 +156,10 @@ function navigateBack() {
         if (prevView === 'history-view') {
             const crumbHist = document.getElementById('crumb-history');
             if (crumbHist) crumbHist.classList.add('active');
+        }
+        if (prevView === 'duplicates-view') {
+            const crumbDup = document.getElementById('crumb-duplicates');
+            if (crumbDup) crumbDup.classList.add('active');
         }
     }
 }
@@ -244,7 +252,6 @@ async function startOrganizing() {
         if (response.ok && data.success) {
             isTransferActive = true;
             lastWasPreview = isPreview;
-            document.getElementById('confirm-box').classList.add('hidden');
             document.getElementById('review-panel').classList.add('hidden');
             
             const fill = document.getElementById('progress-fill');
@@ -274,160 +281,183 @@ async function startOrganizing() {
 }
 
 function renderPreviewDashboard(summary) {
-    const dash = document.getElementById('preview-dashboard');
-
-    // Build this first so it can also be shown on the "nothing to copy" path
-    // below -- a source made up entirely of build/cache folders reports
-    // total_files === 0, and that is exactly when the user most needs to know
-    // why nothing is going to be transferred.
-    let skippedHtml = "";
-    const skippedBreakdown = summary && summary.skipped_dir_breakdown;
-    if (skippedBreakdown && Object.keys(skippedBreakdown).length > 0) {
-        const entries = Object.entries(skippedBreakdown).sort((a, b) => b[1] - a[1]);
-        const totalSkipped = entries.reduce((acc, kv) => acc + kv[1], 0);
-        const breakdownHtml = entries.map(([name, count]) =>
-            `<div style="padding: 1px 0;">• <strong>${escapeHtml(name)}</strong>: ${Number(count).toLocaleString()} folder(s)</div>`
-        ).join('');
-
-        const skippedSamples = summary.skipped_dirs || [];
-        const shown = skippedSamples.slice(0, 5);
-        let samplesHtml = "";
-        if (shown.length > 0) {
-            samplesHtml = `<div style="margin-top: 6px; opacity: 0.85; font-size: 10px; max-height: 70px; overflow-y: auto;">`
-                + shown.map(p => `<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">📁 ${escapeHtml(p)}</div>`).join('')
-                + (skippedSamples.length > shown.length
-                    ? `<div style="opacity: 0.7;">…and ${skippedSamples.length - shown.length} more</div>`
-                    : '')
-                + `</div>`;
-        }
-
-        skippedHtml = `
-        <div style="font-size: 11px; margin-top: 8px; padding: 8px 10px; background: rgba(243, 156, 18, 0.12); border-radius: 6px; border: 1px solid #f39c12;">
-            <div style="font-weight: bold; color: #f39c12;">⏭️ Build / cache folders that will NOT be copied (${totalSkipped.toLocaleString()}):</div>
-            <div style="margin-top: 4px;">${breakdownHtml}</div>
-            ${samplesHtml}
-            <div style="opacity: 0.85; font-size: 10px; margin-top: 4px;">
-                These are skipped on purpose and will not reach the destination. If you need one of them, move it out of the source folder before transferring.
-            </div>
-        </div>`;
-    }
+    const dash = document.getElementById('preview-dashboard-content');
 
     if (!summary || (!summary.total_files && !summary.total_projects)) {
-        dash.innerHTML = "<p class='confirm-desc'>Preview Complete! Ready to transfer files.</p>" + skippedHtml;
+        dash.innerHTML = "<div class='text-center py-12 text-slate-500 dark:text-slate-400'><i data-lucide='check-circle' class='w-12 h-12 mx-auto mb-3 text-emerald-500'></i><p class='text-lg font-medium'>Preview Complete! Ready to transfer files.</p></div>";
+        try { lucide.createIcons(); } catch(e) {}
         return;
     }
-    
+
+    // 1. Categories
     let catsHtml = "";
     if (summary.categories) {
         for (const [cat, count] of Object.entries(summary.categories)) {
-            catsHtml += `<button class="category-pill-btn" data-category="${escapeHtml(cat)}">📂 <strong>${escapeHtml(cat)}</strong>: ${count} <span style="opacity:0.7; font-size:9px;">(Click to preview)</span></button>`;
+            catsHtml += `
+            <button class="category-pill-btn group flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700 rounded-xl hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-md transition-all text-left w-full" data-category="${escapeHtml(cat)}">
+                <div class="flex items-center gap-3 pointer-events-none">
+                    <div class="p-2 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg text-indigo-600 group-hover:bg-indigo-200 dark:group-hover:bg-indigo-900/50 transition-colors">
+                        <i data-lucide="folder" class="w-4 h-4"></i>
+                    </div>
+                    <div>
+                        <div class="font-bold text-sm text-slate-800 dark:text-slate-200">${escapeHtml(cat)}</div>
+                        <div class="text-[10px] text-slate-500 group-hover:text-indigo-500 flex items-center gap-1 transition-colors"><i data-lucide="eye" class="w-3 h-3"></i> View samples</div>
+                    </div>
+                </div>
+                <div class="pointer-events-none">
+                    <span class="text-xs font-bold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 px-2.5 py-1 rounded-full shadow-sm border border-slate-200 dark:border-slate-700">${Number(count).toLocaleString()}</span>
+                </div>
+            </button>`;
         }
     }
 
+    // 2. Skipped Folders
+    let skippedHtml = "";
+    const skippedBreakdown = summary.skipped_dir_breakdown;
+    if (skippedBreakdown && Object.keys(skippedBreakdown).length > 0) {
+        const entries = Object.entries(skippedBreakdown).sort((a, b) => b[1] - a[1]);
+        const totalSkipped = entries.reduce((acc, kv) => acc + kv[1], 0);
+        
+        let breakdownHtml = entries.map(([name, count]) =>
+            `<div class="flex justify-between items-center py-1 border-b border-amber-100 dark:border-amber-900/30 last:border-0"><span class="flex items-center gap-2"><i data-lucide="folder-minus" class="w-4 h-4 text-amber-500/80"></i> <strong class="text-sm">${escapeHtml(name)}</strong></span> <span class="text-xs font-semibold bg-amber-100 dark:bg-amber-900/50 px-2 py-0.5 rounded">${Number(count).toLocaleString()} dirs</span></div>`
+        ).join('');
+
+        skippedHtml = `
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-bold flex items-center gap-2 text-amber-800 dark:text-amber-500"><div class="p-1.5 bg-amber-100 dark:bg-amber-900/40 rounded-lg"><i data-lucide="skip-forward" class="w-4 h-4 text-amber-600"></i></div> Build / Cache Ignored</h3>
+                <span class="text-xs font-bold text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/40 px-2.5 py-1 rounded-full">${totalSkipped.toLocaleString()} total</span>
+            </div>
+            <div class="bg-amber-50 dark:bg-amber-900/10 rounded-xl border border-amber-200/50 dark:border-amber-800/50 p-3 mb-3">
+                ${breakdownHtml}
+            </div>
+            <div class="text-[10px] text-amber-700/80 dark:text-amber-500/80 italic flex items-start gap-1.5">
+                <i data-lucide="info" class="w-3.5 h-3.5 shrink-0"></i>
+                <p>These folders are ignored to save space. They will not be copied.</p>
+            </div>
+        `;
+    }
+
+    // 3. Projects
     let projsHtml = "";
     if (summary.project_details && summary.project_details.length > 0) {
         projsHtml = `
-        <div style="margin-top: 12px; border-top: 1px solid var(--border-color); padding-top: 10px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 4px;">
-                <strong style="font-size: 12px;">💻 Intact Code Repositories (${summary.total_projects}):</strong>
-                <div style="display: flex; gap: 4px;">
-                    <button class="btn secondary" id="projects-select-all-btn" style="font-size: 10px; padding: 2px 6px;">☑ Select All</button>
-                    <button class="btn secondary" id="projects-deselect-all-btn" style="font-size: 10px; padding: 2px 6px;">☐ Deselect All</button>
-                </div>
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2"><div class="p-1.5 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg"><i data-lucide="code-2" class="w-4 h-4 text-indigo-600 dark:text-indigo-400"></i></div> Code Repositories</h3>
+                <span class="text-xs font-bold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 px-2.5 py-1 rounded-full">${summary.total_projects} intact</span>
             </div>
-            <input type="text" id="project-search-filter" placeholder="🔍 Search code projects..." onkeyup="filterProjectsList()" style="font-size: 11px; padding: 4px 8px; margin-bottom: 6px; width: 100%; border-radius: 4px;">
-            <div id="projects-checkbox-container" style="max-height: 130px; overflow-y: auto; background: var(--secondary-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color);">`;
+            <p class="text-xs text-slate-500 mb-3">These folders are kept fully intact by default.</p>
+            
+            <div class="flex gap-2 mb-3">
+                <button class="flex-1 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors border border-slate-200 dark:border-slate-600" id="projects-select-all-btn">Select All</button>
+                <button class="flex-1 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors border border-slate-200 dark:border-slate-600" id="projects-deselect-all-btn">Deselect All</button>
+            </div>
+            
+            <div class="relative mb-3">
+                <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3 top-2.5 pointer-events-none"></i>
+                <input type="text" id="project-search-filter" placeholder="Search repos..." onkeyup="filterProjectsList()" class="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs focus:ring-1 focus:ring-indigo-500">
+            </div>
+            
+            <div id="projects-checkbox-container" class="max-h-64 overflow-y-auto bg-slate-50 dark:bg-slate-900/50 p-2 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1 shadow-inner">`;
 
         summary.project_details.forEach(p => {
             const isExcluded = excludedProjects.includes(p.path);
             const checkedAttr = isExcluded ? '' : 'checked';
-            const textStyle = isExcluded ? 'text-decoration: line-through; opacity: 0.6;' : '';
+            const textStyle = isExcluded ? 'line-through opacity-50' : '';
             const statusLabel = isExcluded 
-                ? '<span style="color: #e74c3c; font-size: 10px;">⚡ (Sort as Regular Files)</span>' 
-                : '<span style="color: #2ecc71; font-size: 10px;">✓ (Keep Intact under Code/)</span>';
-            // Paths travel in data-* attributes rather than inside an inline
-            // onclick="fn('...')" string. The old form only doubled backslashes,
-            // so a folder called "Priyanka's Portfolio" produced a SyntaxError
-            // and the button silently did nothing, while a folder containing a
-            // double quote could close the attribute and inject handlers.
+                ? '<span class="text-rose-500 text-[10px] font-bold"><i data-lucide="zap" class="w-3 h-3 inline"></i> Split up</span>' 
+                : '<span class="text-emerald-600 text-[10px] font-bold"><i data-lucide="check" class="w-3 h-3 inline"></i> Keep Intact</span>';
+            
             projsHtml += `
-            <div class="project-row-item" style="margin-bottom: 4px; font-size: 11px;">
-                <label style="cursor: pointer; display: flex; align-items: center; gap: 6px;">
-                    <input type="checkbox" ${checkedAttr} class="project-exclude-checkbox" data-path="${escapeHtml(p.path)}">
-                    <span style="${textStyle}">📂 <strong>${escapeHtml(p.name)}</strong> ${statusLabel}</span>
-                    <button class="btn secondary project-inspect-btn" data-path="${escapeHtml(p.path)}" data-name="${escapeHtml(p.name)}" style="font-size: 9px; padding: 1px 4px; margin-left: auto;">🔍 Inspect</button>
+            <div class="project-row-item flex flex-col sm:flex-row sm:items-center justify-between p-2.5 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 gap-2">
+                <label class="flex items-start gap-2.5 cursor-pointer flex-1 overflow-hidden">
+                    <input type="checkbox" class="project-checkbox mt-1 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-100 border-slate-300 dark:bg-slate-700 dark:border-slate-600" value="${escapeHtml(p.path)}" ${checkedAttr} onchange="toggleProjectExclusion('${escapeHtml(p.path)}', this.checked)">
+                    <div class="truncate ${textStyle}">
+                        <div class="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate" title="${escapeHtml(p.path)}">${escapeHtml(p.path.split('/').pop())}</div>
+                        <div class="text-[10px] text-slate-400 truncate" title="${escapeHtml(p.path)}">${escapeHtml(p.path)}</div>
+                    </div>
                 </label>
+                <div class="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto pl-7 sm:pl-0">
+                    ${statusLabel}
+                    <button class="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded transition-colors" onclick="inspectProject('${escapeHtml(p.path)}')"><i data-lucide="search" class="w-4 h-4"></i></button>
+                </div>
             </div>`;
         });
-        projsHtml += `</div></div>`;
+        projsHtml += `</div>`;
     }
 
-    let gdriveHtml = "";
-    if (summary.gdrive_zips_extracted && summary.gdrive_zips_extracted > 0) {
-        const namesList = summary.gdrive_zip_names ? summary.gdrive_zip_names.map(escapeHtml).join(', ') : '';
-        gdriveHtml = `
-        <div style="font-size: 11px; margin-top: 8px; padding: 6px 10px; background: rgba(10, 132, 255, 0.1); border-radius: 6px; border: 1px solid var(--primary-color);">
-            📦 <strong>Auto-Unzipped ${summary.gdrive_zips_extracted} Google Drive Archive(s):</strong> ${namesList}
-            <div style="opacity: 0.85; font-size: 10px; margin-top: 2px;">✓ All inner photos, videos, documents & files extracted & sorted into destination categories!</div>
-        </div>`;
-    }
-
+    // 4. Garbage Files
     let garbageHtml = "";
-    if (summary.ignored_garbage && summary.ignored_garbage > 0) {
+    const gTotal = (summary.garbage_breakdown ? Object.values(summary.garbage_breakdown).reduce((a,b)=>a+b, 0) : 0);
+    if (gTotal > 0) {
         garbageHtml = `
-        <div style="font-size: 11px; margin-top: 8px; padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--border-color);">
-            <span>🛡️ Safely Ignored <strong>${summary.ignored_garbage.toLocaleString()}</strong> System/Garbage Files</span>
-            <button class="btn secondary" style="font-size: 10px; padding: 2px 8px;" onclick="inspectGarbageFiles()">
-                🔍 View Breakdown Report
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2"><div class="p-1.5 bg-rose-50 dark:bg-rose-900/30 rounded-lg"><i data-lucide="trash" class="w-4 h-4 text-rose-500"></i></div> System Garbage</h3>
+                <span class="text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-900/30 px-2.5 py-1 rounded-full">${gTotal.toLocaleString()} files</span>
+            </div>
+            <p class="text-xs text-slate-500 mb-3">Temporary system files that will be permanently ignored.</p>
+            <button class="w-full py-2 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-lg transition-colors border border-slate-200 dark:border-slate-700 flex justify-center items-center gap-2" onclick="showGarbageModal()">
+                <i data-lucide="search" class="w-4 h-4"></i> Inspect Ignored Files
             </button>
-        </div>`;
+        `;
     }
 
     dash.innerHTML = `
-        <div class="stat-grid">
-            <div class="stat-card">
-                <div class="stat-val">${escapeHtml(summary.total_files)}</div>
-                <div class="stat-lbl">Files Found</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-val">${escapeHtml(summary.total_size)}</div>
-                <div class="stat-lbl">Total Size</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-val">${escapeHtml(summary.free_space)}</div>
-                <div class="stat-lbl">Free HDD Space</div>
+        <div class="mb-4 p-4 bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-200 dark:border-emerald-800/40 rounded-xl flex items-center gap-3 shadow-sm">
+            <div class="p-2 bg-emerald-100 dark:bg-emerald-900/50 rounded-full"><i data-lucide="check" class="w-5 h-5 text-emerald-600 dark:text-emerald-400"></i></div>
+            <div>
+                <h3 class="font-bold text-emerald-800 dark:text-emerald-400">Scan Complete (0 bytes moved)</h3>
+                <p class="text-xs text-emerald-700 dark:text-emerald-500/80 mt-0.5">Review the breakdown below, then click Execute to begin transferring.</p>
             </div>
         </div>
-        ${gdriveHtml}
-        <div style="font-size: 11px; font-weight: bold; margin-top: 8px; margin-bottom: 4px;">📊 File Categories (Click any category to preview files):</div>
-        <div class="category-pills">
-            ${catsHtml}
-        </div>
-        ${projsHtml}
-        ${garbageHtml}
-        ${skippedHtml}
-        <div style="font-size: 11px; opacity: 0.7; margin-top: 10px; color: var(--success-color);">
-            ✓ <strong>Safe Read-Only Preview:</strong> 0 files moved. Ready to organize.
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <!-- Left Column -->
+            <div class="space-y-5">
+                ${catsHtml ? `
+                <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-5">
+                    <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2"><i data-lucide="pie-chart" class="w-4 h-4 text-indigo-500"></i> File Categories Found</h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${catsHtml}
+                    </div>
+                </div>` : ''}
+                
+                ${garbageHtml ? `
+                <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-5">
+                    ${garbageHtml}
+                </div>` : ''}
+            </div>
+
+            <!-- Right Column -->
+            <div class="space-y-5">
+                ${projsHtml ? `
+                <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-5">
+                    ${projsHtml}
+                </div>` : ''}
+
+                ${skippedHtml ? `
+                <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-5">
+                    ${skippedHtml}
+                </div>` : ''}
+            </div>
         </div>
     `;
 
-    // Wire the generated controls up here: the markup above carries data only,
-    // never executable strings. Re-running renderPreviewDashboard() replaces
-    // the markup and re-attaches these, so the listeners stay in sync.
-    dash.querySelectorAll('.category-pill-btn').forEach(btn => {
-        btn.addEventListener('click', () => inspectCategoryFiles(btn.dataset.category));
+    // Reattach listeners
+    document.querySelectorAll('.category-pill-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const cat = e.currentTarget.getAttribute('data-category');
+            showCategoryPreview(cat);
+        });
     });
-    dash.querySelectorAll('.project-inspect-btn').forEach(btn => {
-        btn.addEventListener('click', () => inspectProject(btn.dataset.path, btn.dataset.name));
-    });
-    dash.querySelectorAll('.project-exclude-checkbox').forEach(box => {
-        box.addEventListener('change', () => onProjectCheckboxChange(box.dataset.path, box.checked));
-    });
+
     const selectAllBtn = document.getElementById('projects-select-all-btn');
     if (selectAllBtn) selectAllBtn.addEventListener('click', () => selectAllProjects(true));
     const deselectAllBtn = document.getElementById('projects-deselect-all-btn');
     if (deselectAllBtn) deselectAllBtn.addEventListener('click', () => selectAllProjects(false));
+
+    try { lucide.createIcons(); } catch(e) {}
 }
+
 
 
 function inspectCategoryFiles(category) {
@@ -627,7 +657,9 @@ async function executeFullCopy() {
     if (goBtn) goBtn.disabled = true;
     lastWasPreview = false;
     document.getElementById('preview-mode').checked = false;
-    document.getElementById('confirm-box').classList.add('hidden');
+    showView('progress-view');
+    // ensure logs are visible again
+    document.getElementById('log-container').scrollTop = document.getElementById('log-container').scrollHeight;
     document.getElementById('default-actions').style.display = "block";
     const heading = document.getElementById('status-heading');
     if (heading) heading.innerText = "🔍 Scanning Files...";
@@ -647,7 +679,6 @@ function resetToSetup() {
     document.getElementById('progress-percentage').innerText = "0%";
     document.getElementById('progress-count').innerText = "0 / 0";
     document.getElementById('log-content').innerHTML = "";
-    document.getElementById('confirm-box').classList.add('hidden');
     document.getElementById('review-panel').classList.add('hidden');
     document.getElementById('default-actions').style.display = "block";
     
@@ -1170,5 +1201,503 @@ async function cancelCurrentOperation() {
             startBtn.disabled = false;
             startBtn.innerText = "Start Organizing";
         }
+    }
+}
+
+// ==========================================
+// STANDALONE DUPLICATE SCANNER LOGIC
+// ==========================================
+
+async function selectDupFolder() {
+    try {
+        const response = await fetch(`/api/select_folder?prompt=${encodeURIComponent("Select folder to scan for duplicates:")}`);
+        const data = await response.json();
+        if (data.folder) {
+            document.getElementById('dup-source-path').value = data.folder;
+        }
+    } catch (e) {
+        console.error("Error selecting folder", e);
+    }
+}
+
+let dupPollInterval = null;
+
+async function startDuplicateScan() {
+    const folder = document.getElementById('dup-source-path').value;
+    if (!folder) {
+        alert("Please select a folder first.");
+        return;
+    }
+    
+    document.getElementById('start-dup-scan-btn').disabled = true;
+    document.getElementById('dup-progress-container').classList.remove('hidden');
+    document.getElementById('dup-results-container').classList.add('hidden');
+    document.getElementById('dup-progress-fill').style.width = "0%";
+    document.getElementById('dup-progress-percentage').innerText = "0%";
+    document.getElementById('dup-current-message').innerText = "Initializing...";
+    
+    try {
+        const response = await fetch('/api/dup_scan_start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder: folder })
+        });
+        const data = await response.json();
+        if (data.success) {
+            pollDuplicateScan();
+        } else {
+            alert(data.error);
+            document.getElementById('start-dup-scan-btn').disabled = false;
+        }
+    } catch(e) {
+        alert("Error starting scan: " + e);
+        document.getElementById('start-dup-scan-btn').disabled = false;
+    }
+}
+
+let isDupPollingInFlight = false;
+
+function pollDuplicateScan() {
+    if (dupPollInterval) clearInterval(dupPollInterval);
+    isDupPollingInFlight = false;
+
+    dupPollInterval = setInterval(async () => {
+        if (isDupPollingInFlight) return;
+        isDupPollingInFlight = true;
+        try {
+            const res = await fetch('/api/dup_scan_status');
+            if (!res.ok) return;
+            const data = await res.json();
+
+            const fill = document.getElementById('dup-progress-fill');
+            const percentTxt = document.getElementById('dup-progress-percentage');
+            const msgTxt = document.getElementById('dup-current-message');
+
+            const progressVal = Number(data.progress ?? 0);
+            const totalVal = Number(data.total ?? 0);
+            const percent = totalVal > 0 ? Math.min(100, Math.round((progressVal / totalVal) * 100)) : 0;
+
+            if (fill) fill.style.width = `${percent}%`;
+            if (percentTxt) percentTxt.innerText = `${percent}%`;
+            if (msgTxt && data.message) msgTxt.innerText = data.message;
+
+            if (data.status === 'complete' || data.status === 'cancelled' || data.status === 'error') {
+                clearInterval(dupPollInterval);
+                dupPollInterval = null;
+                document.getElementById('start-dup-scan-btn').disabled = false;
+
+                if (data.status === 'complete') {
+                    if (msgTxt) msgTxt.innerText = "Loading duplicate groups into view...";
+                    const fullRes = await fetch('/api/dup_scan_status?include_results=1');
+                    const fullData = await fullRes.json();
+                    initDuplicateResults(fullData.results || []);
+                } else if (data.status === 'error') {
+                    alert("Scan failed: " + data.message);
+                }
+            }
+        } catch (e) {
+            console.error("Error polling dup scan", e);
+        } finally {
+            isDupPollingInFlight = false;
+        }
+    }, 500);
+}
+
+async function cancelDuplicateScan() {
+    try {
+        await fetch('/api/dup_scan_cancel', { method: 'POST' });
+        document.getElementById('dup-current-message').innerText = "Cancelling...";
+    } catch (e) {
+        console.error("Cancel failed", e);
+    }
+}
+
+let currentDupResults = [];
+let filteredDupIndices = [];
+let selectedDupPaths = new Set();
+let dupPathToSize = new Map();
+let currentDupRenderLimit = 150;
+
+const DUP_VIDEO_EXTS = new Set(['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v', '.wmv', '.flv', '.3gp', '.mts', '.m2ts']);
+const DUP_PHOTO_EXTS = new Set(['.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp', '.gif', '.bmp', '.tiff', '.tif', '.cr2', '.cr3', '.nef', '.arw', '.dng', '.orf', '.rw2']);
+const DUP_ARCHIVE_EXTS = new Set(['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.tgz', '.dmg', '.iso', '.pkg']);
+
+function formatDupBytes(bytes) {
+    const b = Number(bytes || 0);
+    if (b >= 1024 * 1024 * 1024 * 1024) {
+        return (b / (1024 * 1024 * 1024 * 1024)).toFixed(2) + " TB";
+    }
+    if (b >= 1024 * 1024 * 1024) {
+        return (b / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+    }
+    if (b >= 1024 * 1024) {
+        return (b / (1024 * 1024)).toFixed(2) + " MB";
+    }
+    if (b >= 1024) {
+        return (b / 1024).toFixed(1) + " KB";
+    }
+    return b + " B";
+}
+
+function getFileExtLower(p) {
+    const base = p.split('/').pop() || "";
+    const dot = base.lastIndexOf('.');
+    return dot >= 0 ? base.slice(dot).toLowerCase() : "";
+}
+
+function initDuplicateResults(groups) {
+    currentDupResults = Array.isArray(groups) ? groups : [];
+    selectedDupPaths.clear();
+    dupPathToSize.clear();
+
+    currentDupResults.forEach(group => {
+        const sz = Number(group.size || 0);
+        (group.files || []).forEach((f, idx) => {
+            dupPathToSize.set(f, sz);
+            // Pre-select all redundant copies (idx > 0), keeping idx === 0 as Original
+            if (idx > 0) {
+                selectedDupPaths.add(f);
+            }
+        });
+    });
+
+    const searchInput = document.getElementById('dup-search-input');
+    const typeFilter = document.getElementById('dup-type-filter');
+    if (searchInput) searchInput.value = "";
+    if (typeFilter) typeFilter.value = "all";
+
+    applyDupFiltersAndRender(true);
+}
+
+function onDupFilterChanged() {
+    applyDupFiltersAndRender(true);
+}
+
+function applyDupFiltersAndRender(resetLimit = true) {
+    if (resetLimit) currentDupRenderLimit = 150;
+    const q = ((document.getElementById('dup-search-input') || {}).value || "").trim().toLowerCase();
+    const typeVal = ((document.getElementById('dup-type-filter') || {}).value || "all");
+
+    filteredDupIndices = [];
+    currentDupResults.forEach((group, gIdx) => {
+        const files = group.files || [];
+        if (files.length < 2) return;
+        if (typeVal !== 'all') {
+            const ext = getFileExtLower(files[0]);
+            if (typeVal === 'large' && group.size < 50 * 1024 * 1024) return;
+            if (typeVal === 'video' && !DUP_VIDEO_EXTS.has(ext)) return;
+            if (typeVal === 'photo' && !DUP_PHOTO_EXTS.has(ext)) return;
+            if (typeVal === 'archive' && !DUP_ARCHIVE_EXTS.has(ext)) return;
+            if (typeVal === 'doc' && (DUP_VIDEO_EXTS.has(ext) || DUP_PHOTO_EXTS.has(ext) || DUP_ARCHIVE_EXTS.has(ext))) return;
+        }
+        if (q) {
+            const matchesQuery = files.some(f => f.toLowerCase().includes(q));
+            if (!matchesQuery) return;
+        }
+        filteredDupIndices.push(gIdx);
+    });
+
+    renderDuplicateGroupsList();
+    updateDupMetricsUI();
+}
+
+function updateDupMetricsUI() {
+    let selectedBytes = 0;
+    selectedDupPaths.forEach(p => {
+        selectedBytes += (dupPathToSize.get(p) || 0);
+    });
+    const selectedCount = selectedDupPaths.size;
+    const spaceStr = formatDupBytes(selectedBytes);
+
+    const statGroups = document.getElementById('dup-stat-groups');
+    const statFiles = document.getElementById('dup-stat-files');
+    const statSpace = document.getElementById('dup-stat-space');
+    if (statGroups) statGroups.innerText = currentDupResults.length.toLocaleString();
+    if (statFiles) statFiles.innerText = selectedCount.toLocaleString();
+    if (statSpace) statSpace.innerText = spaceStr;
+
+    const permLabel = document.getElementById('dup-perm-delete-btn-label');
+    const quarLabel = document.getElementById('dup-quarantine-btn-label');
+    if (permLabel) {
+        permLabel.innerText = selectedCount > 0
+            ? `Permanently Delete ${selectedCount.toLocaleString()} Files (${spaceStr})`
+            : `Permanently Delete Selected`;
+    }
+    if (quarLabel) {
+        quarLabel.innerText = selectedCount > 0
+            ? `Quarantine ${selectedCount.toLocaleString()} Files`
+            : `Quarantine to .Duplicates_Trash`;
+    }
+
+    let totalRedundantFiles = 0;
+    let totalRedundantSize = 0;
+    currentDupResults.forEach(group => {
+        totalRedundantFiles += (group.files.length - 1);
+        totalRedundantSize += (group.size * (group.files.length - 1));
+    });
+
+    const summaryEl = document.getElementById('dup-results-summary');
+    if (summaryEl) {
+        if (currentDupResults.length === 0) {
+            summaryEl.innerText = "Found 0 duplicates. Your drive has no redundant files.";
+        } else {
+            const filterNote = filteredDupIndices.length !== currentDupResults.length
+                ? ` • Showing ${filteredDupIndices.length.toLocaleString()} matching groups`
+                : "";
+            summaryEl.innerText =
+                `Total: ${totalRedundantFiles.toLocaleString()} redundant copies across ${currentDupResults.length.toLocaleString()} groups (${formatDupBytes(totalRedundantSize)} max reclaimable)${filterNote}`;
+        }
+    }
+}
+
+function renderDuplicateGroupsList() {
+    document.getElementById('dup-progress-container').classList.add('hidden');
+    document.getElementById('dup-results-container').classList.remove('hidden');
+
+    const list = document.getElementById('dup-groups-list');
+    if (currentDupResults.length === 0) {
+        list.innerHTML = "<div class='text-sm text-emerald-600 dark:text-emerald-400 font-semibold p-6 text-center bg-emerald-50/50 dark:bg-emerald-900/10 rounded-xl border border-emerald-200/50 dark:border-emerald-800/40'>✓ No exact duplicates found in this folder!</div>";
+        return;
+    }
+    if (filteredDupIndices.length === 0) {
+        list.innerHTML = "<div class='text-sm text-slate-500 p-6 text-center'>No duplicate groups match your current search/filter.</div>";
+        return;
+    }
+
+    const rootFolder = (document.getElementById('dup-source-path').value || "").replace(/\/+$/, "");
+    const visibleGroupIndices = filteredDupIndices.slice(0, currentDupRenderLimit);
+
+    let html = "";
+    visibleGroupIndices.forEach((gIdx, displayIdx) => {
+        const group = currentDupResults[gIdx];
+        const groupWaste = group.size * (group.files.length - 1);
+        const primaryName = (group.files[0] || "").split('/').pop() || "File";
+
+        let filesHtml = "";
+        group.files.forEach(f => {
+            const isSelected = selectedDupPaths.has(f);
+            const checkedAttr = isSelected ? "checked" : "";
+            const fileName = f.split('/').pop() || f;
+            const relDir = (rootFolder && f.startsWith(rootFolder + "/"))
+                ? f.slice(rootFolder.length + 1, Math.max(rootFolder.length + 1, f.length - fileName.length - 1))
+                : f.slice(0, Math.max(0, f.length - fileName.length - 1));
+
+            const badgeHtml = isSelected
+                ? `<span class="dup-row-badge px-2 py-0.5 bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400 text-[10px] rounded-md font-bold shrink-0">Will Remove</span>`
+                : `<span class="dup-row-badge px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 text-[10px] rounded-md font-bold shrink-0">Keep (Original)</span>`;
+
+            filesHtml += `
+                <div class="flex items-center justify-between gap-2 p-2 hover:bg-slate-50 dark:hover:bg-slate-800/70 rounded-lg transition-colors border border-transparent hover:border-slate-200 dark:hover:border-slate-700">
+                    <label class="flex items-start gap-2.5 cursor-pointer flex-grow min-w-0">
+                        <input type="checkbox" class="dup-checkbox mt-1 w-4 h-4 text-rose-600 rounded border-slate-300 focus:ring-rose-500 shrink-0" data-group-idx="${gIdx}" data-path="${escapeHtml(f)}" ${checkedAttr}>
+                        <div class="min-w-0 flex-grow">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-xs font-semibold text-slate-800 dark:text-slate-200 break-all">${escapeHtml(fileName)}</span>
+                                ${badgeHtml}
+                            </div>
+                            <div class="text-[11px] text-slate-500 dark:text-slate-400 break-all mt-0.5">📁 ${escapeHtml(relDir || "/")}</div>
+                        </div>
+                    </label>
+                    <button type="button" class="dup-reveal-btn px-2 py-1 text-[10px] font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded border border-slate-200 dark:border-slate-700 shrink-0" data-path="${escapeHtml(f)}" title="Reveal in macOS Finder">
+                        Reveal
+                    </button>
+                </div>
+            `;
+        });
+
+        html += `
+            <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3.5 shadow-sm">
+                <div class="flex flex-wrap justify-between items-center gap-2 mb-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+                    <div class="flex items-center gap-2 min-w-0">
+                        <span class="px-2 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 text-[11px] font-bold rounded-md">#${displayIdx + 1}</span>
+                        <span class="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">${escapeHtml(primaryName)}</span>
+                        <span class="text-[11px] text-slate-500 dark:text-slate-400">(${group.files.length} identical copies)</span>
+                    </div>
+                    <div class="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                        Each: <span class="font-bold">${formatDupBytes(group.size)}</span> • Reclaimable: <span class="font-bold text-emerald-600 dark:text-emerald-400">${formatDupBytes(groupWaste)}</span>
+                    </div>
+                </div>
+                <div class="space-y-1">
+                    ${filesHtml}
+                </div>
+            </div>
+        `;
+    });
+
+    if (filteredDupIndices.length > currentDupRenderLimit) {
+        const remaining = filteredDupIndices.length - currentDupRenderLimit;
+        html += `
+            <div class="text-center py-3">
+                <button type="button" class="px-4 py-2 text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg border border-slate-300 dark:border-slate-600" onclick="showMoreDuplicateGroups()">
+                    Show Next 150 Groups (${remaining.toLocaleString()} more groups available)
+                </button>
+            </div>
+        `;
+    }
+
+    list.innerHTML = html;
+
+    list.querySelectorAll('.dup-checkbox').forEach(cb => {
+        cb.addEventListener('change', () => {
+            onDupCheckboxToggle(cb, Number(cb.dataset.groupIdx), cb.dataset.path);
+        });
+    });
+    list.querySelectorAll('.dup-reveal-btn').forEach(btn => {
+        btn.addEventListener('click', () => revealDupFile(btn.dataset.path));
+    });
+}
+
+function onDupCheckboxToggle(checkbox, groupIdx, filePath) {
+    const group = currentDupResults[groupIdx];
+    if (!group) return;
+
+    if (checkbox.checked) {
+        // Ensure at least 1 copy in this group remains UNCHECKED (kept as Original)
+        const unselectedRemaining = group.files.filter(f => f !== filePath && !selectedDupPaths.has(f));
+        if (unselectedRemaining.length === 0) {
+            checkbox.checked = false;
+            alert("Safety Lock: At least 1 copy in every group must remain unchecked so you never lose the original file.\n\nTo delete this copy instead, first uncheck the copy you want to keep.");
+            return;
+        }
+        selectedDupPaths.add(filePath);
+    } else {
+        selectedDupPaths.delete(filePath);
+    }
+
+    const row = checkbox.closest('label');
+    const badge = row ? row.querySelector('.dup-row-badge') : null;
+    if (badge) {
+        if (checkbox.checked) {
+            badge.className = "dup-row-badge px-2 py-0.5 bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400 text-[10px] rounded-md font-bold shrink-0";
+            badge.innerText = "Will Remove";
+        } else {
+            badge.className = "dup-row-badge px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 text-[10px] rounded-md font-bold shrink-0";
+            badge.innerText = "Keep (Original)";
+        }
+    }
+
+    updateDupMetricsUI();
+}
+
+function selectAllDuplicates(selectRedundant) {
+    selectedDupPaths.clear();
+    if (selectRedundant) {
+        currentDupResults.forEach(group => {
+            (group.files || []).forEach((f, idx) => {
+                if (idx > 0) selectedDupPaths.add(f);
+            });
+        });
+    }
+    renderDuplicateGroupsList();
+    updateDupMetricsUI();
+}
+
+async function revealDupFile(path) {
+    try {
+        await fetch('/api/dup_reveal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: path })
+        });
+    } catch (e) {
+        console.error("Failed to reveal file", e);
+    }
+}
+
+function showMoreDuplicateGroups() {
+    currentDupRenderLimit += 150;
+    renderDuplicateGroupsList();
+}
+
+async function trashSelectedDuplicates(permanentDelete = false) {
+    const rootFolder = document.getElementById('dup-source-path').value;
+    const sourcePaths = Array.from(selectedDupPaths);
+
+    if (sourcePaths.length === 0) {
+        alert("No duplicate files selected.");
+        return;
+    }
+
+    let selectedBytes = 0;
+    sourcePaths.forEach(p => {
+        selectedBytes += (dupPathToSize.get(p) || 0);
+    });
+    const spaceStr = formatDupBytes(selectedBytes);
+
+    const actionVerb = permanentDelete
+        ? `PERMANENTLY DELETE ${sourcePaths.length.toLocaleString()} duplicate files (${spaceStr}) to immediately free disk space`
+        : `quarantine ${sourcePaths.length.toLocaleString()} duplicate files (${spaceStr}) into the .Duplicates_Trash folder`;
+
+    if (!confirm(`Are you sure you want to ${actionVerb}?\n\nAt least 1 verified Original copy in every group is guaranteed to be kept safe.`)) {
+        return;
+    }
+
+    const permBtn = document.getElementById('dup-perm-delete-btn');
+    const quarBtn = document.getElementById('dup-quarantine-btn');
+    if (permBtn) permBtn.disabled = true;
+    if (quarBtn) quarBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/dup_trash_inplace', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source_paths: sourcePaths,
+                root_folder: rootFolder,
+                permanent_delete: permanentDelete,
+                delete_all_redundant: false
+            })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            const reclaimedStr = formatDupBytes(data.bytes_reclaimed || 0);
+            const summaryMsg = permanentDelete
+                ? `Successfully deleted ${data.count.toLocaleString()} duplicate files and freed ${reclaimedStr} of disk space!`
+                : `Successfully quarantined ${data.count.toLocaleString()} duplicate files (${reclaimedStr}) into .Duplicates_Trash.\n\nNote: To actually reclaim disk space on a full drive, click 'Empty .Duplicates_Trash' when ready.`;
+            const refusedMsg = (data.refused && data.refused.length > 0)
+                ? `\n\nSkipped / Kept Safe (${data.refused.length}):\n${data.refused.slice(0, 15).join('\n')}` + (data.refused.length > 15 ? `\n...and ${data.refused.length - 15} more` : "")
+                : "";
+            alert(summaryMsg + refusedMsg);
+            initDuplicateResults(data.remaining_results || []);
+        } else {
+            alert("Error: " + data.error);
+        }
+    } catch (e) {
+        alert("Error during duplicate removal: " + e);
+    } finally {
+        if (permBtn) permBtn.disabled = false;
+        if (quarBtn) quarBtn.disabled = false;
+        try { lucide.createIcons(); } catch(e) {}
+    }
+}
+
+async function emptyDuplicatesTrash() {
+    const rootFolder = document.getElementById('dup-source-path').value;
+    if (!rootFolder) {
+        alert("Please select the scanned folder first.");
+        return;
+    }
+    if (!confirm(`Permanently delete all files inside ${rootFolder}/.Duplicates_Trash to free disk space?`)) {
+        return;
+    }
+    try {
+        const response = await fetch('/api/dup_empty_trash', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ root_folder: rootFolder })
+        });
+        const data = await response.json();
+        if (data.success) {
+            if (data.files_deleted === 0) {
+                alert("No .Duplicates_Trash folder or quarantined files found in this directory.");
+            } else {
+                alert(`Emptied .Duplicates_Trash: permanently deleted ${data.files_deleted.toLocaleString()} files and freed ${formatDupBytes(data.bytes_freed)}!`);
+            }
+        } else {
+            alert("Error emptying .Duplicates_Trash: " + (data.error || "Unknown error"));
+        }
+    } catch (e) {
+        alert("Error emptying .Duplicates_Trash: " + e);
     }
 }
