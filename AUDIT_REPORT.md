@@ -957,3 +957,83 @@ Commit hashes are listed in the summary table at the end of this section.
     after)
   - `test_scanning_a_package_directly_still_looks_inside` (control, passes
     before and after)
+
+#### P2-10 (Low): quarantine records nothing, and emptying the trash does not check that the kept copies still exist
+
+- **Location:** `src/api_organizer.py`, quarantine in
+  `OrganizerAPI.trash_inplace_duplicates`, and
+  `OrganizerAPI.empty_duplicates_trash`.
+- **What happens:** quarantine moves each file to the top level of
+  `<folder>/.Duplicates_Trash` under its bare name (`a.jpg`, then `a_1.jpg`,
+  and so on). Nothing records the folder it came from, or which copy was
+  kept in its place. So:
+  - there is no restore, in the app or by hand, short of searching the drive
+    for each file's twin. The organize flow's duplicates have one
+    (`restore_duplicates`); the standalone utility does not;
+  - emptying the trash deletes everything in it without checking that each
+    file's kept copy still exists. G4 is checked when a file is quarantined,
+    but if the kept copy is deleted afterwards, by the owner or by another
+    program such as a sync tool, emptying the trash deletes the last copy.
+- **Steps to reproduce (scratch run):** create identical `Album/a.jpg` and
+  `Backup/old/a.jpg`, scan, and quarantine `Backup/old/a.jpg`. Delete
+  `Album/a.jpg` outside the app, then empty the trash. The result is success
+  with 1 file deleted, and no copy of the file is left.
+- **Why not fixed:** a fix needs a record written at quarantine time (for
+  example a manifest inside `.Duplicates_Trash` with each file's original
+  path, its kept copy and its size), a restore action, and a decision on
+  what emptying should do with a file whose kept copy is gone: keep it and
+  report it, or restore it. That is a new on-disk format and a change in
+  behaviour, so it is the owner's decision. The record must also be written
+  on an almost full drive, which constrains the design.
+- **Severity:** Low. It takes a deletion outside the utility between the
+  quarantine and the emptying. But the loss is permanent, and the flat trash
+  gives the owner no way to notice beforehand.
+- **Status:** Not fixed: owner decision. No committed test.
+
+#### P2-11 (Low): a refused quarantine leaves a full copy in the trash, and permanent delete removes locked files without saying so
+
+- **Location:** `src/api_organizer.py`, `OrganizerAPI.trash_inplace_duplicates`,
+  and `_force_remove` in `src/file_ops.py`.
+- **What happens:**
+  - Quarantine moved files with `shutil.move`. When the rename fails,
+    `shutil.move` copies the file into the trash and then deletes the
+    original. If the rename failed because the file is locked in the Finder
+    or its folder is read-only, the delete fails for the same reason. The
+    file was reported as "could not be moved", but a full copy of it was left
+    in the trash, still locked. The utility used more space instead of less.
+    On a nearly full drive the copy fails with "No space left on device", so
+    the message told the owner the drive was full and to use permanent
+    delete, instead of naming the lock.
+  - Permanent delete goes through `_force_remove`, which clears the Finder
+    "Locked" flag and makes the file writable before deleting it. A locked
+    file is the owner's explicit mark not to delete it, but locked
+    duplicates are deleted like any other, and the result does not mention
+    them. So quarantine refuses a locked file while permanent delete removes
+    it silently. If the delete fails, the file is left unlocked with changed
+    permissions.
+- **Steps to reproduce:** create identical `Album/a.jpg` and
+  `Backup/old/a.jpg`, lock the second (`chflags uchg`), and scan.
+  Quarantining it reports "could not be moved ([Errno 1] Operation not
+  permitted)" and leaves a locked copy in `.Duplicates_Trash`. Permanently
+  deleting it instead reports 1 file deleted, with nothing refused.
+- **Fix (stray copy):** quarantine now only renames (`os.rename`) within the
+  drive, and never copies. A refused file leaves nothing in the trash, and
+  the message gives the real error.
+- **Behaviour change:** a file on a different volume from the trash (only
+  possible when the scanned folder contains another volume's mount point)
+  is now refused, with a message saying so. Before, it was copied into the
+  trash on the scanned folder's volume, then deleted from its own.
+- **Not fixed (locked files and permanent delete):** `_force_remove` is
+  shared with the organize flow, and whether locked duplicates should be
+  kept, listed or deleted is the owner's decision. Recommendation: have
+  both actions of the duplicates utility refuse locked files with a message
+  that names the lock, or at least list them in the result; and restore the
+  flag and mode if a delete fails.
+- **Status:** Stray copy fixed; deleting locked files not fixed (owner
+  decision). Tests in `tests/test_pass2_refused_quarantine.py` (the first
+  two fail on `92ed5c1`; the read-only-folder test is skipped when run as
+  root):
+  - `test_locked_file_is_refused_without_a_copy_in_the_trash`
+  - `test_file_in_read_only_folder_is_refused_without_a_copy_in_the_trash`
+  - `test_ordinary_duplicate_is_still_quarantined` (control, passes before
+    and after)

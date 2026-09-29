@@ -1064,7 +1064,6 @@ class OrganizerAPI:
         """trash_inplace_duplicates' body; the caller holds _dup_removal_lock."""
         import os
         import errno
-        import shutil
         from .categorizer import split_filename_ext
         from .file_ops import _force_remove, files_are_identical
 
@@ -1176,13 +1175,22 @@ class OrganizerAPI:
                         target_path = os.path.join(trash_dir, f"{name}_{counter}{ext_dot}")
                         counter += 1
 
-                    shutil.move(file_path, target_path)
+                    # Rename only. shutil.move falls back to copy-then-delete
+                    # when the rename fails; for a locked file or a read-only
+                    # folder the delete then fails too, so a full copy was
+                    # left in the trash while the file was reported as not
+                    # moved (audit P2-11). A rename also copies no data.
+                    os.rename(file_path, target_path)
                     removed_count += 1
                     bytes_reclaimed += file_sz
                 except OSError as e:
                     if e.errno == errno.ENOSPC:
                         refused.append(
                             f"{os.path.basename(file_path)}: drive is 100% full (No space left on device to update .Duplicates_Trash). Use 'Permanently Delete' instead."
+                        )
+                    elif e.errno == errno.EXDEV:
+                        refused.append(
+                            f"{os.path.basename(file_path)}: is on a different drive from .Duplicates_Trash, so it was not moved."
                         )
                     else:
                         refused.append(f"{os.path.basename(file_path)}: could not be moved ({e}).")
