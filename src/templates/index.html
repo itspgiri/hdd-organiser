@@ -367,53 +367,6 @@
                     </div>
                 </div>
 
-                <!-- INSPECT CODE PROJECT MODAL -->
-                <div id="inspect-modal" class="inspect-modal hidden fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm">
-                    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg p-5 flex flex-col max-h-[90vh]">
-                        <div class="flex justify-between items-center mb-4 pb-3 border-b border-slate-200 dark:border-slate-700">
-                            <strong id="inspect-folder-title" class="text-base text-slate-800 dark:text-slate-200 flex items-center gap-2"><i data-lucide="folder-search" class="pointer-events-none w-5 h-5 text-indigo-500"></i> Folder Inspection</strong>
-                            <button type="button" class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors p-1" onclick="closeInspectModal()"><i data-lucide="x" class="pointer-events-none w-5 h-5"></i></button>
-                        </div>
-                        <div id="inspect-files-list" class="inspect-files-list text-slate-600 dark:text-slate-400 overflow-y-auto flex-1 mb-4 bg-slate-50 dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-800"></div>
-                        <div class="pt-3 border-t border-slate-200 dark:border-slate-700">
-                            <button type="button" class="w-full py-3 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-400 text-sm font-semibold rounded-xl transition-colors border border-indigo-200 dark:border-indigo-800 flex justify-center items-center gap-2" id="toggle-exclude-btn" onclick="toggleExcludeCurrentProject()">
-                                <i data-lucide="zap" class="pointer-events-none w-4 h-4"></i> Sort This as Regular Files
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- INSPECT GARBAGE FILES MODAL -->
-                <div id="garbage-modal" class="inspect-modal hidden fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm">
-                    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg p-5 flex flex-col max-h-[90vh]">
-                        <div class="flex justify-between items-center mb-3 pb-3 border-b border-slate-200 dark:border-slate-700">
-                            <strong class="text-base text-slate-800 dark:text-slate-200 flex items-center gap-2"><i data-lucide="trash" class="pointer-events-none w-5 h-5 text-rose-500"></i> Ignored System & Garbage Files</strong>
-                            <button type="button" class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors p-1" onclick="closeGarbageModal()"><i data-lucide="x" class="pointer-events-none w-5 h-5"></i></button>
-                        </div>
-                        <div class="text-xs text-amber-800 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 p-3.5 rounded-xl border border-amber-200/50 dark:border-amber-800/50 mb-4 leading-relaxed flex gap-2 items-start">
-                            <i data-lucide="info" class="pointer-events-none w-4 h-4 shrink-0 mt-0.5"></i> 
-                            <div><strong>Why so many?</strong> When files are copied to an external drive (exFAT/FAT32/NTFS), macOS automatically creates a hidden <code>._filename</code> AppleDouble metadata file for every single image & video. Drive Organizer safely ignores these <code>._*</code> sidecars so your destination drive stays 100% clean.</div>
-                        </div>
-                        <div id="garbage-breakdown-list" class="text-sm text-slate-700 dark:text-slate-300 mb-4 grid grid-cols-2 gap-3 bg-slate-50 dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-800"></div>
-                        <div class="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Sample Paths:</div>
-                        <div id="garbage-samples-list" class="inspect-files-list text-slate-600 dark:text-slate-400 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-800"></div>
-                    </div>
-                </div>
-
-                <!-- INSPECT CATEGORY FILES MODAL -->
-                <div id="category-modal" class="inspect-modal hidden fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm">
-                    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg p-5 flex flex-col max-h-[90vh]">
-                        <div class="flex justify-between items-start mb-4 pb-3 border-b border-slate-200 dark:border-slate-700">
-                            <div>
-                                <strong id="category-modal-title" class="text-lg text-slate-800 dark:text-slate-200 flex items-center gap-2 mb-1">Category File Preview</strong>
-                                <div id="category-modal-subtitle" class="text-xs text-slate-500 dark:text-slate-400"></div>
-                            </div>
-                            <button type="button" class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors p-1 bg-slate-100 dark:bg-slate-700 rounded-lg" onclick="closeCategoryModal()"><i data-lucide="x" class="pointer-events-none w-5 h-5"></i></button>
-                        </div>
-                        <div id="category-files-list" class="inspect-files-list text-slate-600 dark:text-slate-400 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900 rounded-xl p-4 border border-slate-100 dark:border-slate-800 text-xs leading-relaxed space-y-2"></div>
-                    </div>
-                </div>
-
                 <!-- POST-TRANSFER REVIEW TOOLS -->
                 <div id="review-panel" class="review-panel hidden mt-6 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
                     <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 mb-1 flex items-center gap-2"><i data-lucide="wrench" class="pointer-events-none w-4 h-4 text-slate-500"></i> Post-Organization Review & Tools</h3>
@@ -481,6 +434,56 @@
             </div>
 
     </main>
+
+    <!-- Pop-ups sit outside <main> and every .view (audit P3-03): inside a hidden
+         view they never show, and a view's fade-in transform would pin their
+         position:fixed to the view, where the card's overflow-hidden clips them. -->
+    <!-- INSPECT CODE PROJECT MODAL -->
+    <div id="inspect-modal" class="inspect-modal hidden fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm">
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg p-5 flex flex-col max-h-[90vh]">
+            <div class="flex justify-between items-center mb-4 pb-3 border-b border-slate-200 dark:border-slate-700">
+                <strong id="inspect-folder-title" class="text-base text-slate-800 dark:text-slate-200 flex items-center gap-2"><i data-lucide="folder-search" class="pointer-events-none w-5 h-5 text-indigo-500"></i> Folder Inspection</strong>
+                <button type="button" class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors p-1" onclick="closeInspectModal()"><i data-lucide="x" class="pointer-events-none w-5 h-5"></i></button>
+            </div>
+            <div id="inspect-files-list" class="inspect-files-list text-slate-600 dark:text-slate-400 overflow-y-auto flex-1 mb-4 bg-slate-50 dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-800"></div>
+            <div class="pt-3 border-t border-slate-200 dark:border-slate-700">
+                <button type="button" class="w-full py-3 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-400 text-sm font-semibold rounded-xl transition-colors border border-indigo-200 dark:border-indigo-800 flex justify-center items-center gap-2" id="toggle-exclude-btn" onclick="toggleExcludeCurrentProject()">
+                    <i data-lucide="zap" class="pointer-events-none w-4 h-4"></i> Sort This as Regular Files
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- INSPECT GARBAGE FILES MODAL -->
+    <div id="garbage-modal" class="inspect-modal hidden fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm">
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg p-5 flex flex-col max-h-[90vh]">
+            <div class="flex justify-between items-center mb-3 pb-3 border-b border-slate-200 dark:border-slate-700">
+                <strong class="text-base text-slate-800 dark:text-slate-200 flex items-center gap-2"><i data-lucide="trash" class="pointer-events-none w-5 h-5 text-rose-500"></i> Ignored System & Garbage Files</strong>
+                <button type="button" class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors p-1" onclick="closeGarbageModal()"><i data-lucide="x" class="pointer-events-none w-5 h-5"></i></button>
+            </div>
+            <div class="text-xs text-amber-800 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 p-3.5 rounded-xl border border-amber-200/50 dark:border-amber-800/50 mb-4 leading-relaxed flex gap-2 items-start">
+                <i data-lucide="info" class="pointer-events-none w-4 h-4 shrink-0 mt-0.5"></i> 
+                <div><strong>Why so many?</strong> When files are copied to an external drive (exFAT/FAT32/NTFS), macOS automatically creates a hidden <code>._filename</code> AppleDouble metadata file for every single image & video. Drive Organizer safely ignores these <code>._*</code> sidecars so your destination drive stays 100% clean.</div>
+            </div>
+            <div id="garbage-breakdown-list" class="text-sm text-slate-700 dark:text-slate-300 mb-4 grid grid-cols-2 gap-3 bg-slate-50 dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-800"></div>
+            <div class="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">Sample Paths:</div>
+            <div id="garbage-samples-list" class="inspect-files-list text-slate-600 dark:text-slate-400 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-800"></div>
+        </div>
+    </div>
+
+    <!-- INSPECT CATEGORY FILES MODAL -->
+    <div id="category-modal" class="inspect-modal hidden fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm">
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg p-5 flex flex-col max-h-[90vh]">
+            <div class="flex justify-between items-start mb-4 pb-3 border-b border-slate-200 dark:border-slate-700">
+                <div>
+                    <strong id="category-modal-title" class="text-lg text-slate-800 dark:text-slate-200 flex items-center gap-2 mb-1">Category File Preview</strong>
+                    <div id="category-modal-subtitle" class="text-xs text-slate-500 dark:text-slate-400"></div>
+                </div>
+                <button type="button" class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors p-1 bg-slate-100 dark:bg-slate-700 rounded-lg" onclick="closeCategoryModal()"><i data-lucide="x" class="pointer-events-none w-5 h-5"></i></button>
+            </div>
+            <div id="category-files-list" class="inspect-files-list text-slate-600 dark:text-slate-400 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900 rounded-xl p-4 border border-slate-100 dark:border-slate-800 text-xs leading-relaxed space-y-2"></div>
+        </div>
+    </div>
 
     <script>
       // Injected fresh per launch by the Flask app

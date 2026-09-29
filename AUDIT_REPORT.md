@@ -1370,5 +1370,40 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_inspect_button_for_a_project_with_an_apostrophe`
   - `test_a_folder_name_cannot_run_code`
 
+#### P3-03 (Low): the preview dashboard's pop-ups never appear
+
+- **Location:** `src/templates/index.html` (the three pop-ups) and
+  `src/static/style.css` (`.inspect-modal`).
+- **What happens:** the pop-ups for a code project, the ignored files and a
+  category's samples were written inside the progress view. Only the dry-run
+  dashboard opens them, and the progress view is hidden while it shows, so
+  opening one removed its `hidden` class and nothing appeared. Even with
+  P3-01 fixed the buttons seemed dead, and the pop-up's "Sort This as Regular
+  Files" button could not be reached at all. Moving them into the dashboard
+  would not be enough: every `.view` keeps the `transform` left by its
+  fade-in animation, which places a `position: fixed` child against the view
+  instead of the window, and the card's `overflow-hidden` clips it. Once the
+  pop-ups showed, a second defect appeared: leftover rules in `style.css`
+  styled `.inspect-modal`, the full-window backdrop, as a card. The backdrop
+  had rounded, bordered corners and, in dark mode, was opaque in the
+  pop-up's own colour, so the page behind vanished and the pop-up had no
+  visible edge. The nesting was known before the audit; the backdrop was not.
+- **Steps to reproduce:** with P3-01 fixed, run a dry run and click a
+  category, "Inspect Ignored Files" or a project's magnifier.
+- **Fix:** the pop-ups are direct children of `<body>`, after `<main>`, and
+  the card rules for `.inspect-modal` are removed; the Tailwind classes on
+  the backdrop and the card already style both.
+- **Status:** Fixed. Tests in `tests/test_pass3_modals.py` (all four fail on
+  `92ed5c1`, and also on the P3-02 commit, which has P3-01's fix):
+  - `test_popups_are_visible_in_light_mode`
+  - `test_popups_are_visible_in_dark_mode`
+  - `test_sort_as_regular_files_button_in_the_inspect_popup`
+  - `test_popups_are_outside_every_view`
+
+  "Visible" means displayed, inside the 700 x 550 window, and on top: the
+  element at the centre of the pop-up belongs to it. The backdrop must be
+  see-through with square corners; with the pop-ups moved but the old CSS,
+  the dark-mode test fails with "backdrop is opaque: rgb(30, 41, 59)".
+
 ---
 
