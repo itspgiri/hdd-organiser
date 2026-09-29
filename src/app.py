@@ -92,13 +92,18 @@ def _sanitize_csv_cell(value):
     return value
 
 
+def _json_dict() -> dict:
+    data = request.get_json(silent=True)
+    return data if isinstance(data, dict) else {}
+
+
 @app.before_request
 def require_token():
     # Only /api/ is gated. The page itself must load so it can receive the token.
     if not request.path.startswith("/api/"):
         return None
     supplied = request.headers.get("X-Organizer-Token") or request.args.get("token")
-    if supplied and secrets.compare_digest(supplied, API_TOKEN):
+    if isinstance(supplied, str) and supplied.isascii() and secrets.compare_digest(supplied, API_TOKEN):
         return None
     return jsonify({"success": False, "error": "Unauthorized"}), 403
 
@@ -136,15 +141,29 @@ def select_folder():
 
 @app.route("/api/start", methods=["POST"])
 def start():
-    data = request.get_json(silent=True) or {}
+    data = _json_dict()
     source = data.get("source")
     dest = data.get("dest")
     is_preview = bool(data.get("is_preview", False))
     dest_mode = data.get("dest_mode", "new")
     excluded_projects = data.get("excluded_projects", [])
 
-    if not source or not dest:
+    if isinstance(source, list):
+        if not source or not all(isinstance(s, str) and s.strip() for s in source):
+            return jsonify({"success": False, "error": "Source and destination required"}), 400
+    elif not isinstance(source, str) or not source.strip():
         return jsonify({"success": False, "error": "Source and destination required"}), 400
+
+    if not isinstance(dest, str) or not dest.strip():
+        return jsonify({"success": False, "error": "Source and destination required"}), 400
+
+    if not isinstance(dest_mode, str) or dest_mode not in ("new", "merge", "organize"):
+        dest_mode = "new"
+
+    if not isinstance(excluded_projects, list):
+        excluded_projects = []
+    else:
+        excluded_projects = [p for p in excluded_projects if isinstance(p, str) and p.strip()]
 
     path_error = OrganizerAPI.validate_paths(source, dest)
     if path_error:
@@ -233,10 +252,10 @@ def dissolve_project():
     with state_lock:
         if state.status in ("running", "cancelling"):
             return jsonify({"success": False, "error": "Cannot dissolve projects while a transfer is running."}), 409
-    data = request.get_json(silent=True) or {}
+    data = _json_dict()
     dest = data.get("dest")
     project_path = data.get("project_path")
-    if not dest or not project_path:
+    if not isinstance(dest, str) or not dest.strip() or not isinstance(project_path, str) or not project_path.strip():
         return jsonify({"success": False, "error": "dest and project_path required"}), 400
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
@@ -261,14 +280,17 @@ def trash_duplicates():
     with state_lock:
         if state.status in ("running", "cancelling"):
             return jsonify({"success": False, "error": "Cannot trash duplicates while a transfer is running.", "count": 0, "refused": []}), 409
-    data = request.get_json(silent=True) or {}
+    data = _json_dict()
     source_paths = data.get("source_paths", [])
     # dest is required for the safety re-check: it locates the checkpoint DB
     # that records which destination file each duplicate matched.
     dest = data.get("dest", "")
-    if not source_paths or not isinstance(source_paths, list):
+    if not isinstance(source_paths, list):
         return jsonify({"success": False, "error": "No duplicate source paths were provided.", "count": 0, "refused": []})
-    if not dest or not os.path.exists(os.path.join(dest, ".organizer_checkpoint.db")):
+    source_paths = [p for p in source_paths if isinstance(p, str) and p.strip()]
+    if not source_paths:
+        return jsonify({"success": False, "error": "No duplicate source paths were provided.", "count": 0, "refused": []})
+    if not isinstance(dest, str) or not dest.strip() or not os.path.exists(os.path.join(dest, ".organizer_checkpoint.db")):
         return jsonify({
             "success": False,
             "error": "Destination folder with checkpoint database is required to verify duplicates safely.",
@@ -286,10 +308,14 @@ def restore_duplicates():
     with state_lock:
         if state.status in ("running", "cancelling"):
             return jsonify({"success": False, "error": "Cannot restore duplicates while a transfer is running.", "count": 0, "refused": []}), 409
-    data = request.get_json(silent=True) or {}
+    data = _json_dict()
     dest = data.get("dest", "")
     source_paths = data.get("source_paths")
-    if not dest or not os.path.exists(os.path.join(dest, ".organizer_checkpoint.db")):
+    if isinstance(source_paths, list):
+        source_paths = [p for p in source_paths if isinstance(p, str) and p.strip()]
+    else:
+        source_paths = None
+    if not isinstance(dest, str) or not dest.strip() or not os.path.exists(os.path.join(dest, ".organizer_checkpoint.db")):
         return jsonify({
             "success": False,
             "error": "Destination folder with checkpoint database is required to restore trashed duplicates.",
@@ -298,7 +324,7 @@ def restore_duplicates():
         }), 400
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
-    count, refused = api.restore_duplicates(dest, source_paths=source_paths if isinstance(source_paths, list) else None)
+    count, refused = api.restore_duplicates(dest, source_paths=source_paths)
     return jsonify({"success": True, "count": count, "refused": refused})
 
 
@@ -341,7 +367,7 @@ def list_volumes():
 @app.route("/api/open_finder", methods=["GET"])
 def open_finder():
     folder = request.args.get("path")
-    if not folder:
+    if not folder or not folder.strip():
         return jsonify({"success": False, "error": "Path required"}), 400
     folder_real = os.path.realpath(os.path.expanduser(folder.strip()))
     if not folder_real.startswith("/") or not os.path.isdir(folder_real):
@@ -423,9 +449,9 @@ def repair_transfer():
     with state_lock:
         if state.status in ("running", "cancelling"):
             return jsonify({"success": False, "error": "Cannot repair while a transfer is running."}), 409
-    data = request.get_json(silent=True) or {}
+    data = _json_dict()
     dest = data.get("dest")
-    if not dest or not os.path.exists(dest):
+    if not isinstance(dest, str) or not dest.strip() or not os.path.isdir(dest):
         return jsonify({"success": False, "error": "Destination path required"})
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
@@ -500,15 +526,14 @@ def _norm_folder(path: str) -> str:
 
 @app.route("/api/dup_scan_start", methods=["POST"])
 def dup_scan_start():
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        data = {}
+    data = _json_dict()
     raw_folder = data.get("folder")
     if not isinstance(raw_folder, str) or not raw_folder.strip():
         return jsonify({"success": False, "error": "Valid folder path required"}), 400
-    folder = _norm_folder(raw_folder.strip())
+    folder = os.path.expanduser(raw_folder.strip())
     if not os.path.isdir(folder):
         return jsonify({"success": False, "error": "Valid folder path required"}), 400
+    folder_norm = _norm_folder(folder)
 
     with state_lock:
         # "cancelling" too: the old scan only notices a cancel at its next
@@ -523,7 +548,7 @@ def dup_scan_start():
         state.dup_total = 0
         state.dup_message = "Initializing duplicate scan..."
         state.dup_results = []
-        state.dup_root = folder
+        state.dup_root = folder_norm
         state.dup_scan_id += 1
         scan_id = state.dup_scan_id
         global active_dup_scanner_cancelled
@@ -606,9 +631,7 @@ def get_dup_scan_status():
 
 @app.route("/api/dup_reveal", methods=["POST"])
 def dup_reveal():
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        data = {}
+    data = _json_dict()
     path = data.get("path", "")
     if not isinstance(path, str) or not path.strip():
         return jsonify({"success": False, "error": "File does not exist."}), 404
@@ -650,11 +673,17 @@ def dup_trash_inplace():
         scan_root = state.dup_root
         scan_id = state.dup_scan_id
 
-    data = request.get_json(silent=True) or {}
-    source_paths = data.get("source_paths", [])
-    root_folder = data.get("root_folder", "")
+    data = _json_dict()
+    raw_source_paths = data.get("source_paths", [])
+    raw_root_folder = data.get("root_folder", "")
     permanent_delete = bool(data.get("permanent_delete", False))
     delete_all_redundant = bool(data.get("delete_all_redundant", False))
+
+    root_folder = raw_root_folder.strip() if isinstance(raw_root_folder, str) else ""
+    if isinstance(raw_source_paths, list):
+        source_paths = [p for p in raw_source_paths if isinstance(p, str) and p.strip()]
+    else:
+        source_paths = []
 
     if delete_all_redundant and groups_snapshot:
         source_paths = [
@@ -718,9 +747,7 @@ def dup_empty_trash():
                 "files_deleted": 0,
                 "bytes_freed": 0,
             }), 409
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        data = {}
+    data = _json_dict()
     raw_root = data.get("root_folder", "")
     if not isinstance(raw_root, str) or not raw_root.strip():
         return jsonify({"success": False, "error": "Valid root_folder required."}), 400
