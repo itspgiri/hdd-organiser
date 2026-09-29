@@ -129,9 +129,10 @@ class NeverDestroysLastCopyTests(Pass1Case):
         for rel in dest_data_files(self.dest):
             dest_hashes.add(sha256_file(os.path.join(self.dest, rel)))
 
-        # Not transferred by design (reported in the preview instead):
-        # skip-listed folders, system garbage, and the Takeout archive itself,
-        # which is replaced by its extracted members (see finding P1-08).
+        # Not transferred by design: a skip-listed folder and system garbage
+        # (the preview reports skipped folders), and the Takeout archive
+        # itself, which is replaced by its extracted members. Archive members
+        # that the unzip skips are not reported anywhere (finding P1-08).
         by_design = {"Caches/keep-me.txt", ".DS_Store", "Photos/._IMG_0001.jpg",
                      "takeout-20230101T000000Z-001.zip"}
         for rel, path in files.items():

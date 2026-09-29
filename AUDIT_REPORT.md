@@ -320,6 +320,75 @@ summary table at the end of this section.
     while the lock is not held. On `92ed5c1` it flags the lookups listed under
     Location.
 
+#### P1-08 (Medium): auto-unzipped archives are not copied, and members the unzip skips are silently left behind
+
+- **Location:** `src/scanner.py`: `Scanner.is_gdrive_zip` (the
+  `_GDRIVE_TOKEN_RE` name match), `extract_gdrive_zip` with
+  `_should_skip_zip_member_path`, and `scan_directory` (after unzipping, the
+  archive itself is not added to the transfer list).
+- **What happens:** any `.zip` whose name contains the word `takeout`,
+  `gdrive`, `drive`, `icloud`, `onedrive`, `cloud` or `download` is unpacked,
+  and only the unpacked files are organized; the archive itself is never
+  copied. That matches personal archives too (`Hard Drive Backup.zip`,
+  `download.zip`). Members the unzip skips are neither unpacked nor copied, and
+  nothing reports them. The preview's "Skipped N build/cache folder(s)" line
+  counts folders on disk only. The skipped members are:
+  - anything inside a folder named in `SKIP_SYSTEM_DIRS` (`.git`,
+    `node_modules`, `Caches`, `.tmp`, `venv`, `.cache`, ...) or `__MACOSX`;
+  - "garbage" names (`._*`, `~$*`, `.DS_Store`, `Thumbs.db`, `desktop.ini`);
+  - unsafe paths (zip-slip) and symbolic links.
+
+  A code project inside an archive is not recognised as a project either: its
+  files are scattered into categories and its `.git` is dropped. The run ends
+  with "All done! 100% of files organized safely." Once the owner wipes the
+  source, the skipped members are gone.
+- **Steps to reproduce (confirmed on synthetic data):** in the source, create
+  `takeout-20230101T000000Z-001.zip` with `Takeout/Drive/report.pdf`,
+  `Takeout/Drive/Caches/important-notes.txt`, `Takeout/Drive/.tmp/draft.docx`,
+  `Takeout/Drive/myproject/.git/config` and
+  `Takeout/Drive/node_modules/patched/index.js`. Also create
+  `Hard Drive Backup.zip` with `Documents/thesis.docx` and
+  `Documents/venv/README-setup.md`. Preview, then organize. Only `report.pdf`
+  and `thesis.docx` reach the destination. Neither archive is copied, and
+  neither the preview nor the final summary mentions the rest.
+- **Not fixed, owner decision:** replacing an archive by its contents is the
+  intended design (the guarantee test
+  `test_every_transferable_source_file_reaches_the_destination` lists the
+  archive as not transferred by design). Keeping archives costs space on a
+  nearly full drive, so the owner should choose.
+- **Recommendation:** also copy the original archive (for example into an
+  `Archives/` folder), at least whenever any member was skipped. Count skipped
+  members in the preview and the final summary. Match only real export names
+  (for example `takeout-*.zip`, `drive-download-*.zip`) or ask per archive.
+
+#### P1-09 (Low): after a crash and resume, files are recorded as duplicates of their own copies
+
+- **Location:** `src/file_ops.py`, `FileEngine.record_copy` (commits every 50
+  rows) and `resolve_destination` (the identical-file check at the target
+  name).
+- **What happens:** copies are committed to the checkpoint database in batches
+  of 50. After a crash, files that already reached their final names may have
+  no committed record. On resume, `resolve_destination` finds an identical
+  file at the target name, which is the file's own earlier copy, and records
+  the source as `DUPLICATE_SKIPPED` with `duplicate_of` pointing at that copy.
+  The duplicates list (`get_duplicate_records`) then offers those originals
+  as duplicates, and Verify counts them as skipped duplicates. No data is lost:
+  `trash_duplicates` re-checks that the twin exists, is a different file and
+  is byte-identical before moving anything, and the organized copy is
+  complete. But the numbers are wrong and the owner is invited to "clean up"
+  files that are not duplicates.
+- **Steps to reproduce (confirmed on synthetic data):** 12 source files; crash
+  the transfer in a child process after 5 copies (`run_until_crash` in
+  `tests/pass1_helpers.py`); the database has 0 rows. Resume with a merge
+  organize: 5 sources are recorded as `DUPLICATE_SKIPPED`, each with
+  `duplicate_of` set to its own copy (for example `batch1/file04.txt` ->
+  `Documents/Text/file04.txt`), and `get_duplicate_records` returns 5.
+- **Not fixed:** it is bookkeeping, not data loss, and the fix changes how
+  resumes are recorded.
+- **Recommendation:** when the identical file at the target name has no
+  database record pointing to it, record it as this source's completed copy
+  instead of a duplicate; or commit each record as it is written.
+
 #### P1-10 (Low): `copy_file` deletes a file that appears at its target during the copy
 
 - **Location:** `src/file_ops.py`, `FileEngine.copy_file`, the final rename.
