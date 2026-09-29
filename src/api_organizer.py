@@ -1058,6 +1058,13 @@ class OrganizerAPI:
 
         trash_dir = os.path.join(root_folder, ".Duplicates_Trash")
         if not permanent_delete:
+            if os.path.islink(trash_dir):
+                # Would move files out of the scanned folder, possibly to
+                # another drive, and emptying it would not be allowed (P2-07).
+                return 0, [
+                    f"{trash_dir} is a symbolic link, so nothing was quarantined. "
+                    "Replace it with a real folder, or use 'Permanently Delete'."
+                ], 0
             try:
                 os.makedirs(trash_dir, exist_ok=True)
             except OSError as e:
@@ -1203,6 +1210,14 @@ class OrganizerAPI:
         from .file_ops import _clear_immutable
 
         trash_dir = os.path.join(os.path.abspath(os.path.expanduser(root_folder)), ".Duplicates_Trash")
+        # os.walk follows the top folder when it is a symbolic link, so a
+        # linked .Duplicates_Trash had the contents of whatever it pointed to
+        # deleted (audit P2-07).
+        if os.path.islink(trash_dir):
+            return 0, 0, (
+                f"{trash_dir} is a symbolic link (to {os.path.realpath(trash_dir)}). "
+                "It was not emptied, so that nothing outside the scanned folder is deleted."
+            )
         if not os.path.isdir(trash_dir):
             return 0, 0, ""
 

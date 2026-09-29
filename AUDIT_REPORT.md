@@ -831,3 +831,29 @@ Commit hashes are listed in the summary table at the end of this section.
   - `test_quarantine_refuses_a_folder_other_than_the_scanned_one`
   - `test_quarantine_into_the_scanned_folder_still_works` (control, passes
     before and after)
+
+#### P2-07 (Low): emptying a symlinked `.Duplicates_Trash` deletes whatever it points to
+
+- **Location:** `src/api_organizer.py`, `OrganizerAPI.empty_duplicates_trash`
+  (and quarantine in `trash_inplace_duplicates`).
+- **What happens:** emptying the trash walks `<folder>/.Duplicates_Trash`
+  with `os.walk`, which follows the top folder when it is a symbolic link,
+  and deletes every file it finds. The final `shutil.rmtree` refuses the link
+  but its error is ignored, so the call reports success. A link is plausible
+  here: when the drive is full, the quarantine cannot create the folder, and
+  pointing `.Duplicates_Trash` at a folder on another drive is an obvious
+  workaround. If that folder also holds anything else, emptying the trash
+  permanently deletes it. Quarantine moved files through the link as well,
+  so they left the scanned folder, and with it the drive.
+- **Steps to reproduce:** `ln -s ~/Documents/SomeFolder
+  <scanned>/.Duplicates_Trash`, then click "Empty .Duplicates_Trash". The
+  files in `SomeFolder` are deleted.
+- **Fix:** a `.Duplicates_Trash` that is a symbolic link is neither emptied
+  nor used for quarantine. Both return an error that says why. Links inside
+  a real trash folder were already safe: they are removed, not followed.
+- **Status:** Fixed. Tests in `tests/test_pass2_symlinked_trash.py` (the
+  first two fail on `92ed5c1`):
+  - `test_emptying_a_symlinked_trash_deletes_nothing_behind_it`
+  - `test_quarantine_does_not_move_files_through_a_symlinked_trash`
+  - `test_emptying_a_real_trash_folder_still_works` (control, passes before
+    and after)
