@@ -1740,6 +1740,10 @@ class OrganizerAPI:
             "mismatched_count": mismatched_count,
             "missing_list": missing_list[:10],
             "mismatched_list": mismatched_list[:10],
+            # Files whose first and last 1 MB were compared (the rest: size only);
+            # the UI reports this instead of claiming a full hash (audit P3-06).
+            "hashes_checked": hashes_checked,
+            "hash_check_limit": hash_check_limit,
             "is_perfect": is_perfect
         }
 

@@ -1471,5 +1471,51 @@ Commit hashes are listed in the summary table at the end of this section.
     on `92ed5c1`)
   - `test_clean_transfer_is_still_reported_as_complete` (negative control)
 
+#### P3-06 (High): the verification checker says the source is "100% safe to delete" without checking everything
+
+- **Location:** `src/static/script.js` (`runVerificationChecker`,
+  `verifyHistoryRun`). What it reports comes from `src/api_organizer.py`
+  (`verify_transfer`).
+- **What happens:** "Run Integrity Verification Checker" showed "Running 100%
+  SHA-256 Hash & File Size Integrity Verification Check…", then "🟢 100%
+  Integrity Verified & Safe to Delete!" and "It is now 100% safe to delete
+  your original source folder!". `verify_transfer` checks much less:
+  - Only files recorded one by one in the checkpoint's `copies` table.
+    Code projects are copied as whole folders and recorded elsewhere, so
+    they are never checked, and a project that failed to copy is recorded
+    nowhere, so it cannot be reported missing.
+  - Nothing the scan skipped on purpose (build and cache folders, whose
+    names include ordinary ones such as `Caches`, `venv` and `.tmp`; system
+    files) or could not read.
+  - SHA-256 of a file's first and last 1 MB, not of the whole file, and only
+    for the first 10,000 files; after that, size only. The owner's drive
+    holds far more than 10,000 files.
+
+  After the P3-05 transfer, where a code project was not copied, the checker
+  still said the source was 100% safe to delete. Deleting it loses the
+  project: data loss in a plausible scenario. Screenshot from before the
+  fix: `audit_screenshots/pass3/evidence/p3-06-before-fix-verify-after-failed-project.png`.
+- **Steps to reproduce:** as for P3-05, then click "Run Integrity
+  Verification Checker".
+- **Fix:** the result says what was checked: "✓ The copied files check
+  out", the number of files checked, how many are at the destination with
+  the right size, and how many also matched on their first and last 1 MB
+  ("the rest by size only"; `verify_transfer` now also returns
+  `hashes_checked` and `hash_check_limit`). A note lists what the check does
+  not cover (code projects, skipped build or cache folders, ignored system
+  files, anything the scan could not read) and asks the owner to check those
+  before erasing the source. After a run with failures the result is amber,
+  says what was not copied and "Do not erase the source until they have been
+  copied." A check started from History takes the failure counts from that
+  run's history record. The checker no longer says the source is safe to
+  delete, and the loading line no longer claims a full SHA-256 check.
+- **Not changed:** `verify_transfer` still does not check code projects or
+  know about failed project copies; see Recommendations.
+- **Status:** Fixed (what the UI claims). Tests in
+  `tests/test_pass3_verification_claims.py` (all three fail on `92ed5c1`):
+  - `test_after_a_failed_project_it_does_not_say_safe_to_delete`
+  - `test_from_history_it_reports_that_runs_failures`
+  - `test_after_a_clean_run_it_says_what_was_and_was_not_checked`
+
 ---
 

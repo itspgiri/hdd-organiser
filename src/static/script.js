@@ -992,7 +992,7 @@ async function runVerificationChecker() {
     const area = document.getElementById('review-content-area');
     if (!dest) return;
     area.classList.remove('hidden');
-    area.innerHTML = "<div>Running 100% SHA-256 Hash & File Size Integrity Verification Check...</div>";
+    area.innerHTML = "<div>Checking the copied files at the destination (size, and the first and last 1 MB of up to 10,000 files)...</div>";
 
     try {
         const response = await fetch(`/api/verify_transfer?dest=${encodeURIComponent(dest)}`);
@@ -1007,20 +1007,36 @@ async function runVerificationChecker() {
             return;
         }
 
+        // verify_transfer checks the files recorded one by one: present, right
+        // size and, for up to hash_check_limit of them, the first and last 1 MB.
+        // It never sees code projects, skipped folders or anything the run
+        // failed to record, so it must not call the source safe to delete
+        // (audit P3-06).
+        const notCovered = `
+                <div style="font-size: 11px; margin-top: 8px; opacity: 0.85;">
+                    Not covered by this check: code projects (copied as whole folders), folders skipped as build or cache folders, ignored system files, and anything the scan could not read. Check those before you erase the source.
+                </div>`;
+
         if (data.is_perfect) {
+            const warn = lastRunProblems;
+            const boxStyle = warn
+                ? "background: rgba(243, 156, 18, 0.15); border: 1px solid #f39c12;"
+                : "background: rgba(46, 204, 113, 0.15); border: 1px solid #2ecc71;";
+            const title = warn
+                ? `<div style="color: #d35400; font-weight: bold; font-size: 14px;">⚠️ The copied files check out, but ${warn.files} file(s) and ${warn.projects} code project(s) were not copied. Do not erase the source until they have been copied.</div>`
+                : `<div style="color: #2ecc71; font-weight: bold; font-size: 14px;">✓ The copied files check out</div>`;
             area.innerHTML = `
-            <div style="background: rgba(46, 204, 113, 0.15); border: 1px solid #2ecc71; padding: 12px; border-radius: 8px;">
-                <div style="color: #2ecc71; font-weight: bold; font-size: 14px;">🟢 100% Integrity Verified & Safe to Delete!</div>
+            <div style="${boxStyle} padding: 12px; border-radius: 8px;">
+                ${title}
                 <div style="font-size: 12px; margin-top: 6px;">
-                    • Total Files Checked: <strong>${escapeHtml(data.total_files)}</strong><br>
-                    • Successfully Verified Copied Files: <strong>${escapeHtml(data.verified_count)}</strong><br>
-                    • Skipped Duplicates (Intact at destination): <strong>${escapeHtml(data.skipped_duplicates)}</strong><br>
-                    • Missing Files: <strong>0</strong><br>
-                    • Corrupted / Mismatched Files: <strong>0</strong>
+                    • Files checked: <strong>${escapeHtml(data.total_files)}</strong><br>
+                    • At the destination with the right size: <strong>${escapeHtml(data.verified_count)}</strong><br>
+                    • Also matched on their first and last 1 MB: <strong>${escapeHtml(Number(data.hashes_checked) || 0)}</strong> (the rest by size only)<br>
+                    • Skipped duplicates (the kept copy is present): <strong>${escapeHtml(data.skipped_duplicates)}</strong><br>
+                    • Missing files: <strong>0</strong><br>
+                    • Mismatched files: <strong>0</strong>
                 </div>
-                <div style="font-size: 11px; margin-top: 8px; opacity: 0.8;">
-                    ✓ All files exist at destination with exact byte size & hash match. It is now 100% safe to delete your original source folder!
-                </div>
+                ${notCovered}
             </div>`;
         } else {
             let errorHtml = "";
@@ -1158,8 +1174,8 @@ async function loadHistoryView(shouldNavigate = true) {
         container.querySelectorAll('.history-csv-btn').forEach(btn => {
             btn.addEventListener('click', () => downloadHistoryCSV(btn.dataset.dest));
         });
-        container.querySelectorAll('.history-verify-btn').forEach(btn => {
-            btn.addEventListener('click', () => verifyHistoryRun(btn.dataset.dest));
+        container.querySelectorAll('.history-verify-btn').forEach((btn, i) => {
+            btn.addEventListener('click', () => verifyHistoryRun(btn.dataset.dest, runs[i]));
         });
         container.querySelectorAll('.history-finder-btn').forEach(btn => {
             btn.addEventListener('click', () => openHistoryFinder(btn.dataset.dest));
@@ -1174,9 +1190,13 @@ function downloadHistoryCSV(destPath) {
     downloadCsvReport(destPath);
 }
 
-async function verifyHistoryRun(destPath) {
+async function verifyHistoryRun(destPath, run) {
     if (!destPath) return;
     document.getElementById('dest-path').value = destPath;
+    // The check reports this run's failures, not the last run of this session's
+    // (the history record has failed_files / failed_projects; audit P3-06).
+    lastRunProblems = runProblems(run);
+    showRunProblems(lastRunProblems);
     showView('progress-view');
     document.getElementById('review-panel').classList.remove('hidden');
     await runVerificationChecker();
