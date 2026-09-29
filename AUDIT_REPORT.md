@@ -57,7 +57,46 @@ Severity scale: **Critical** means data loss is likely in normal use.
 **Medium** means misleading results that could lead the owner to delete data.
 **Low** means a narrow edge case or defence-in-depth.
 
-_Findings are added below as each one is confirmed._
+Findings are numbered in the order they were identified, not by severity, and
+are added here as each one is confirmed. Commit hashes are listed in the
+summary table at the end of this section.
+
+#### P1-07 (High): parallel transfer workers crash the app with a segmentation fault
+
+- **Location:** `src/file_ops.py`, `FileEngine.is_already_copied`,
+  `is_content_duplicate` (the size probe), `get_project_copy`,
+  `is_project_dissolved`.
+- **What happens:** the four transfer worker threads share one SQLite
+  connection, guarded by `FileEngine.lock`. macOS's system SQLite (which the
+  Python 3.9 in `.venv` links against) is built with `THREADSAFE=2`, so a
+  connection must never be used by two threads at the same time. These
+  lookups kept their cursor in a local variable after `with self.lock:` ended.
+  When the method returned, Python freed the cursor, and freeing a cursor that
+  still holds an unfinished statement calls `sqlite3_reset()`. That ran outside
+  the lock, at the same time as another worker's query on the same connection.
+  The race is hit whenever a lookup finds a row, which is almost every lookup
+  in a resumed or merge run. On the owner's drive (hundreds of thousands of
+  files, four workers) a resumed transfer is very likely to crash. The copy
+  itself is atomic, so a crash does not half-write a file, but the app dies
+  mid-transfer and memory corruption inside SQLite could also damage the
+  checkpoint database, which the repair logic relies on to decide what to
+  delete. The race is how this finding surfaced: before the fix, the pass-1
+  guarantee tests crashed `make test` about 1 run in 40 with
+  `Segmentation fault: 11`, inside a resumed transfer.
+- **Steps to reproduce:** record a few hundred files in a `FileEngine`, then
+  call `is_already_copied()` on them from four threads in a loop. On
+  `92ed5c1` the process segfaults in well under a second, every time.
+- **Fix:** every cursor on the shared connection is now closed while the lock
+  is still held (new helper `FileEngine._select_one`; `has_completed_owner` and
+  `mark_project_dissolved` close theirs explicitly).
+- **Status:** Fixed. Tests in `tests/test_pass1_checkpoint_thread_safety.py`:
+  - `test_parallel_checkpoint_lookups_do_not_crash` runs the four-thread
+    lookup loop for 2 seconds in a child process. On `92ed5c1` the child exits
+    with -11 (SIGSEGV).
+  - `test_every_cursor_is_closed_before_the_lock_is_released` is a
+    deterministic check: it flags any cursor that is freed without being closed
+    while the lock is not held. On `92ed5c1` it flags the lookups listed under
+    Location.
 
 ### For later passes
 

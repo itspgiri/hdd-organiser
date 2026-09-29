@@ -539,15 +539,33 @@ class FileEngine:
             except Exception:
                 pass
 
+    def _select_one(self, sql: str, params: tuple = ()):
+        """First row of a query, or None. The caller must hold self.lock.
+
+        The checkpoint connection is shared by the transfer's worker threads,
+        and macOS's system SQLite is built with THREADSAFE=2, which means a
+        connection must never be used by two threads at the same time. A
+        cursor that still holds an unfinished statement calls sqlite3_reset()
+        when Python frees it. If the cursor outlives `with self.lock:` (for
+        example a local variable freed when the method returns), that reset
+        runs outside the lock, at the same time as another worker's query.
+        That race crashed resumed transfers with a segmentation fault. So the
+        cursor is always closed here, while the lock is still held.
+        """
+        cursor = self.conn.execute(sql, params)
+        try:
+            return cursor.fetchone()
+        finally:
+            cursor.close()
+
     def is_already_copied(self, source_path: str) -> bool:
         """Check if file was already successfully copied in a previous run and remains intact."""
         with self.lock:
-            cursor = self.conn.execute(
+            row = self._select_one(
                 'SELECT dest_path, status, size, mtime, COALESCE(duplicate_of, "") '
                 'FROM copies WHERE source_path = ?',
                 (source_path,)
             )
-            row = cursor.fetchone()
         if not row or row[1] != 'completed':
             return False
         dest_path, _status, rec_size, rec_mtime, duplicate_of = row
@@ -575,7 +593,10 @@ class FileEngine:
                 "SELECT source_path FROM copies WHERE dest_path = ? AND status = 'completed'",
                 (dest_path,)
             )
-            rows = cursor.fetchall()
+            try:
+                rows = cursor.fetchall()
+            finally:
+                cursor.close()  # inside the lock: see _select_one
         for (src,) in rows:
             if src != exclude_source:
                 return True
@@ -584,10 +605,9 @@ class FileEngine:
     def is_project_dissolved(self, source_path: str) -> bool:
         """Returns True if a code project was previously dissolved by the user."""
         with self.lock:
-            cursor = self.conn.execute(
+            row = self._select_one(
                 'SELECT status FROM projects WHERE source_path = ?', (source_path,)
             )
-            row = cursor.fetchone()
         return bool(row and row[0] == 'dissolved')
 
     def mark_project_dissolved(self, project_folder_path: str):
@@ -597,7 +617,9 @@ class FileEngine:
                 "UPDATE projects SET status = 'dissolved' WHERE dest_path = ? OR source_path = ?",
                 (project_folder_path, project_folder_path)
             )
-            if cur.rowcount == 0:
+            updated = cur.rowcount
+            cur.close()  # inside the lock: see _select_one
+            if updated == 0:
                 self.conn.execute(
                     "INSERT OR REPLACE INTO projects (source_path, dest_path, status) VALUES (?, ?, 'dissolved')",
                     (project_folder_path, project_folder_path)
@@ -607,10 +629,9 @@ class FileEngine:
     def get_project_copy(self, source_path: str) -> Optional[str]:
         """Destination of a previously copied project, or None."""
         with self.lock:
-            cursor = self.conn.execute(
+            row = self._select_one(
                 'SELECT dest_path, status FROM projects WHERE source_path = ?', (source_path,)
             )
-            row = cursor.fetchone()
         if row and row[1] == 'completed' and row[0] and os.path.isdir(row[0]):
             return row[0]
         return None
@@ -640,10 +661,10 @@ class FileEngine:
             # with DUPLICATE_SKIPPED pointing to itself (e.g. if a source file's
             # mtime was touched and re-evaluated against its own destination copy).
             if dest_path == "DUPLICATE_SKIPPED" and duplicate_of:
-                existing = self.conn.execute(
+                existing = self._select_one(
                     "SELECT dest_path, status FROM copies WHERE source_path = ?",
                     (source_path,)
-                ).fetchone()
+                )
                 if existing and existing[1] == "completed" and existing[0] == duplicate_of:
                     dest_path = duplicate_of
                     duplicate_of = ""
@@ -730,13 +751,13 @@ class FileEngine:
         # Cheap existence probe first, so files with a brand-new size skip the
         # hash entirely.
         with self.lock:
-            cursor = self.conn.execute(
+            probe = self._select_one(
                 "SELECT 1 FROM copies WHERE size = ? AND status = 'completed' "
                 "AND dest_path NOT IN ('DUPLICATE_SKIPPED', '') LIMIT 1",
                 (size,)
             )
-            if cursor.fetchone() is None:
-                return False, "", ""
+        if probe is None:
+            return False, "", ""
 
         src_hash = self._get_part_hash(source_path, size)
         if not src_hash:
