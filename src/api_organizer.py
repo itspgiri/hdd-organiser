@@ -789,6 +789,333 @@ class OrganizerAPI:
         finally:
             engine.close()
 
+    def find_duplicates_inplace(self, folder_abs: str) -> List[dict]:
+        """
+        Scans a folder in-place for exact duplicate files with ZERO disk writes
+        (safe even when the target drive has 0 bytes of free space).
+        Groups by size -> partial hash -> full byte compare.
+        Returns a list of groups sorted by wasted space descending:
+        [{"size": int, "files": [keep_path, dup1, dup2, ...]}, ...]
+        """
+        import os
+        import re
+        import stat
+        from .scanner import SKIP_SYSTEM_DIRS, SKIP_ORGANIZER_DIRS, GARBAGE_FILES
+        from .file_ops import get_part_hash, files_are_identical, _is_regular_file
+
+        self.cancelled = False
+        self.log_cb(f"Scanning {folder_abs} for in-place duplicates (read-only)...")
+
+        PACKAGE_BUNDLE_EXTS = (
+            ".app", ".photoslibrary", ".photolibrary", ".aplibrary",
+            ".fcpbundle", ".logicx", ".band", ".xcodeproj", ".xcworkspace",
+            ".rtfd", ".framework", ".bundle", ".plugin", ".kext",
+            ".imovielibrary", ".tvlibrary", ".musiclibrary",
+        )
+
+        size_groups: Dict[int, List[str]] = {}
+        scanned_files = 0
+        seen_dirs = set()
+        seen_inodes = set()
+
+        folder_abs = os.path.abspath(os.path.expanduser(folder_abs))
+
+        for root, dirs, files in os.walk(folder_abs):
+            if self.cancelled:
+                return []
+
+            try:
+                root_real = os.path.realpath(root)
+            except OSError:
+                root_real = root
+            if root_real in seen_dirs:
+                dirs.clear()
+                continue
+            seen_dirs.add(root_real)
+
+            unpruned_dirs = list(dirs)
+            items_set = set(unpruned_dirs) | set(files)
+
+            # Never reach inside an intact code repository and delete internal files
+            if root != folder_abs and self.categorizer.is_project_root(root, items_set):
+                dirs.clear()
+                continue
+
+            # Prune system dirs, organizer dirs, trash dirs, and macOS package bundles
+            dirs[:] = [
+                d for d in dirs
+                if d not in SKIP_SYSTEM_DIRS
+                and d not in SKIP_ORGANIZER_DIRS
+                and not d.startswith(".unzipped_")
+                and d != ".Duplicates_Trash"
+                and not d.lower().endswith(PACKAGE_BUNDLE_EXTS)
+                and not os.path.islink(os.path.join(root, d))
+            ]
+
+            for f in files:
+                if self.cancelled:
+                    return []
+                if f in GARBAGE_FILES or f.startswith(("._", "~$")):
+                    continue
+                path = os.path.join(root, f)
+                try:
+                    st = os.lstat(path)
+                    if not stat.S_ISREG(st.st_mode):
+                        continue
+                    sz = st.st_size
+                    if sz <= 0:
+                        continue
+                    # Skip hardlinks to the exact same physical inode
+                    if st.st_ino and st.st_dev:
+                        inode_key = (st.st_dev, st.st_ino)
+                        if inode_key in seen_inodes:
+                            continue
+                        seen_inodes.add(inode_key)
+
+                    size_groups.setdefault(sz, []).append(path)
+                    scanned_files += 1
+                    if scanned_files % 300 == 0:
+                        self._emit_progress(
+                            0, 0,
+                            f"Phase 1/2: Scanning drive... ({scanned_files:,} files inspected)"
+                        )
+                except OSError:
+                    pass
+
+        candidate_sizes = {sz: paths for sz, paths in size_groups.items() if len(paths) > 1}
+        total_candidates = sum(len(paths) for paths in candidate_sizes.values())
+        self.log_cb(
+            f"Found {len(candidate_sizes):,} file sizes ({total_candidates:,} files) with potential duplicates. Hashing..."
+        )
+
+        copy_Copy_re = re.compile(r"(?:\bcopy\b|\(\d+\)|[ _-]\d+)$", re.IGNORECASE)
+
+        def _original_sort_key(p: str):
+            stem = os.path.splitext(os.path.basename(p))[0]
+            looks_like_copy = 1 if copy_Copy_re.search(stem) else 0
+            depth = p.count(os.sep)
+            return (looks_like_copy, depth, len(p), p)
+
+        duplicate_groups = []
+        processed = 0
+
+        # Check largest candidate sizes first so progress reflects heavy I/O accurately
+        for sz, paths in sorted(candidate_sizes.items(), key=lambda kv: kv[0], reverse=True):
+            if self.cancelled:
+                break
+            hash_groups: Dict[str, List[str]] = {}
+            for p in paths:
+                if self.cancelled:
+                    break
+                phash = get_part_hash(p, sz)
+                if phash:
+                    hash_groups.setdefault(phash, []).append(p)
+                processed += 1
+                if processed % 25 == 0 or sz >= 50 * 1024 * 1024:
+                    self._emit_progress(
+                        processed,
+                        max(1, total_candidates),
+                        f"Phase 2/2: Verifying duplicates... ({processed:,} / {total_candidates:,} candidate files)"
+                    )
+
+            for phash, hpaths in hash_groups.items():
+                if len(hpaths) > 1:
+                    exact_groups: List[List[str]] = []
+                    for hp in hpaths:
+                        if self.cancelled:
+                            break
+                        matched = False
+                        for eg in exact_groups:
+                            if files_are_identical(hp, eg[0]):
+                                eg.append(hp)
+                                matched = True
+                                break
+                        if not matched:
+                            exact_groups.append([hp])
+
+                    for eg in exact_groups:
+                        if len(eg) > 1:
+                            eg_sorted = sorted(eg, key=_original_sort_key)
+                            duplicate_groups.append({"size": sz, "files": eg_sorted})
+
+        duplicate_groups.sort(key=lambda g: g["size"] * (len(g["files"]) - 1), reverse=True)
+        self.log_cb(f"Found {len(duplicate_groups):,} duplicate groups.")
+        return duplicate_groups
+
+    def trash_inplace_duplicates(
+        self,
+        source_paths: list,
+        root_folder: str,
+        permanent_delete: bool = False,
+        groups: Optional[List[dict]] = None,
+    ) -> Tuple[int, list, int]:
+        """
+        Removes or quarantines duplicate files in-place on the scanned drive.
+        - If permanent_delete=True: unlinks files directly (_force_remove) to immediately
+          free space on a 100% full drive without needing a single free byte.
+        - If permanent_delete=False: moves files into root_folder/.Duplicates_Trash/.
+        - Every file is re-verified against a surviving unselected twin from its group
+          before removal so the user can NEVER delete all copies of a file.
+        Returns (removed_count, refused_list, bytes_reclaimed).
+        """
+        import os
+        import errno
+        import shutil
+        from .categorizer import split_filename_ext
+        from .file_ops import _force_remove, get_part_hash, files_are_identical
+
+        requested_set = {os.path.abspath(p) for p in source_paths if p}
+        if not requested_set:
+            return 0, [], 0
+
+        # Build a map of file -> surviving twin from scan groups
+        twin_map: Dict[str, str] = {}
+        if groups:
+            for g in groups:
+                g_files = [os.path.abspath(f) for f in g.get("files", []) if f]
+                existing_g = [f for f in g_files if os.path.exists(f)]
+                if len(existing_g) < 2:
+                    continue
+                # Find a member NOT requested for deletion; if user selected ALL members
+                # in the group, force-preserve existing_g[0] so at least 1 copy survives!
+                unselected = [f for f in existing_g if f not in requested_set]
+                keeper = unselected[0] if unselected else existing_g[0]
+                for f in existing_g:
+                    if f != keeper and f in requested_set:
+                        twin_map[f] = keeper
+
+        trash_dir = os.path.join(root_folder, ".Duplicates_Trash")
+        if not permanent_delete:
+            try:
+                os.makedirs(trash_dir, exist_ok=True)
+            except OSError as e:
+                if e.errno == errno.ENOSPC:
+                    return 0, [
+                        "Drive is 100% full (0 bytes free): cannot create .Duplicates_Trash folder. "
+                        "Use 'Permanently Delete Selected' to free space immediately."
+                    ], 0
+                return 0, [f"Could not create .Duplicates_Trash: {e}"], 0
+
+        removed_count = 0
+        bytes_reclaimed = 0
+        refused = []
+
+        for raw_path in source_paths:
+            if not raw_path:
+                continue
+            file_path = os.path.abspath(raw_path)
+            if not os.path.exists(file_path):
+                continue
+
+            # Verify a surviving twin exists and matches
+            twin = twin_map.get(file_path, "")
+            if groups is not None:
+                if not twin:
+                    refused.append(
+                        f"{os.path.basename(file_path)}: preserved as the surviving original copy in its group."
+                    )
+                    continue
+                if not os.path.exists(twin):
+                    refused.append(
+                        f"{os.path.basename(file_path)}: surviving original ({os.path.basename(twin)}) is missing - kept safe."
+                    )
+                    continue
+                try:
+                    if os.path.samefile(file_path, twin):
+                        refused.append(
+                            f"{os.path.basename(file_path)}: points to the exact same file as original - kept safe."
+                        )
+                        continue
+                    file_sz = os.path.getsize(file_path)
+                    twin_sz = os.path.getsize(twin)
+                    if file_sz != twin_sz or get_part_hash(file_path, file_sz) != get_part_hash(twin, twin_sz):
+                        refused.append(
+                            f"{os.path.basename(file_path)}: no longer matches original copy - kept safe."
+                        )
+                        continue
+                except OSError:
+                    refused.append(
+                        f"{os.path.basename(file_path)}: could not verify original copy - kept safe."
+                    )
+                    continue
+
+            try:
+                file_sz = os.path.getsize(file_path)
+            except OSError:
+                file_sz = 0
+
+            if permanent_delete:
+                if _force_remove(file_path):
+                    removed_count += 1
+                    bytes_reclaimed += file_sz
+                else:
+                    refused.append(f"{os.path.basename(file_path)}: permission denied or locked.")
+            else:
+                try:
+                    filename = os.path.basename(file_path)
+                    target_path = os.path.join(trash_dir, filename)
+
+                    counter = 1
+                    name, ext = split_filename_ext(filename)
+                    ext_dot = ext if ext.startswith(".") else (f".{ext}" if ext else "")
+                    while os.path.exists(target_path):
+                        target_path = os.path.join(trash_dir, f"{name}_{counter}{ext_dot}")
+                        counter += 1
+
+                    shutil.move(file_path, target_path)
+                    removed_count += 1
+                    bytes_reclaimed += file_sz
+                except OSError as e:
+                    if e.errno == errno.ENOSPC:
+                        refused.append(
+                            f"{os.path.basename(file_path)}: drive is 100% full (No space left on device to update .Duplicates_Trash). Use 'Permanently Delete' instead."
+                        )
+                    else:
+                        refused.append(f"{os.path.basename(file_path)}: could not be moved ({e}).")
+                except Exception as e:
+                    refused.append(f"{os.path.basename(file_path)}: could not be moved ({e}).")
+
+        return removed_count, refused, bytes_reclaimed
+
+    def empty_duplicates_trash(self, root_folder: str) -> Tuple[int, int, str]:
+        """Permanently deletes root_folder/.Duplicates_Trash to reclaim disk space."""
+        import os
+        import shutil
+        from .file_ops import _clear_immutable
+
+        trash_dir = os.path.join(os.path.abspath(os.path.expanduser(root_folder)), ".Duplicates_Trash")
+        if not os.path.isdir(trash_dir):
+            return 0, 0, ""
+
+        files_deleted = 0
+        bytes_freed = 0
+        for root, dirs, files in os.walk(trash_dir, topdown=False):
+            for f in files:
+                fp = os.path.join(root, f)
+                try:
+                    sz = os.path.getsize(fp)
+                except OSError:
+                    sz = 0
+                try:
+                    _clear_immutable(fp)
+                    os.unlink(fp)
+                    files_deleted += 1
+                    bytes_freed += sz
+                except OSError:
+                    pass
+            for d in dirs:
+                dp = os.path.join(root, d)
+                try:
+                    os.rmdir(dp)
+                except OSError:
+                    pass
+        try:
+            shutil.rmtree(trash_dir, ignore_errors=True)
+        except Exception as e:
+            return files_deleted, bytes_freed, str(e)
+        return files_deleted, bytes_freed, ""
+
+
     def get_duplicate_records(self, dest_abs: str):
         """Returns list of duplicate source files recorded during run."""
         db_path = os.path.join(dest_abs, ".organizer_checkpoint.db")

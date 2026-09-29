@@ -36,10 +36,18 @@ class UIState:
     logs = []
     preview_summary = {}
 
+    # Standalone Duplicate Scanner State
+    dup_status = "idle"
+    dup_progress = 0
+    dup_total = 0
+    dup_message = "Ready"
+    dup_results = []
+
 
 state = UIState()
 state_lock = threading.Lock()
 active_api_instance = None
+active_dup_scanner_cancelled = False
 
 
 def reset_state():
@@ -471,6 +479,184 @@ def cancel_operation():
             state.status = "cancelling"
         state.message = "Cancelling... finishing the file currently in flight."
     log_cb("⛔ Cancellation requested. Finishing the current file, then stopping.")
+    return jsonify({"success": True})
+
+
+@app.route("/api/dup_scan_start", methods=["POST"])
+def dup_scan_start():
+    data = request.get_json(silent=True) or {}
+    folder = data.get("folder")
+    if not folder or not os.path.exists(folder):
+        return jsonify({"success": False, "error": "Valid folder path required"}), 400
+
+    with state_lock:
+        if state.dup_status == "running":
+            return jsonify({"success": False, "error": "Scan already running"})
+        state.dup_status = "running"
+        state.dup_progress = 0
+        state.dup_total = 0
+        state.dup_message = "Initializing duplicate scan..."
+        state.dup_results = []
+        global active_dup_scanner_cancelled
+        active_dup_scanner_cancelled = False
+
+    def run_dup_scan():
+        config_path = os.path.join(base_dir, "config.json")
+        
+        def dup_log_cb(msg):
+            print(msg)
+            with state_lock:
+                state.dup_message = msg
+
+        def dup_prog_cb(cur, tot, msg, eta=""):
+            with state_lock:
+                state.dup_progress = cur
+                state.dup_total = tot
+                state.dup_message = msg
+
+        api = OrganizerAPI(config_path, dup_log_cb, dup_prog_cb)
+        
+        # We need to hack cancelled flag because it's set by cancel() in api_organizer
+        def check_cancel():
+            if active_dup_scanner_cancelled:
+                api.cancelled = True
+        
+        # Override log_cb to also check cancel so it can abort loops
+        original_log = api.log_cb
+        def new_log(msg):
+            check_cancel()
+            original_log(msg)
+        api.log_cb = new_log
+        
+        # Override emit_progress to check cancel
+        original_prog = api._emit_progress
+        def new_prog(*args, **kwargs):
+            check_cancel()
+            original_prog(*args, **kwargs)
+        api._emit_progress = new_prog
+
+        try:
+            groups = api.find_duplicates_inplace(folder)
+            with state_lock:
+                if active_dup_scanner_cancelled:
+                    state.dup_status = "cancelled"
+                else:
+                    state.dup_results = groups
+                    state.dup_status = "complete"
+                    state.dup_message = "Scan complete."
+        except Exception as e:
+            with state_lock:
+                state.dup_status = "error"
+                state.dup_message = str(e)
+            print(f"Dup scan error: {e}")
+
+    thread = threading.Thread(target=run_dup_scan)
+    thread.daemon = True
+    thread.start()
+    return jsonify({"success": True})
+
+
+@app.route("/api/dup_scan_status", methods=["GET"])
+def get_dup_scan_status():
+    include_results = request.args.get("include_results") == "1"
+    with state_lock:
+        payload = {
+            "status": state.dup_status,
+            "progress": state.dup_progress,
+            "total": state.dup_total,
+            "message": state.dup_message,
+            "group_count": len(state.dup_results) if state.dup_results else 0,
+        }
+        if include_results and state.dup_status == "complete":
+            payload["results"] = state.dup_results
+        return jsonify(payload)
+
+
+@app.route("/api/dup_reveal", methods=["POST"])
+def dup_reveal():
+    data = request.get_json(silent=True) or {}
+    path = data.get("path", "")
+    if not path or not os.path.exists(path):
+        return jsonify({"success": False, "error": "File does not exist."}), 404
+    try:
+        subprocess.Popen(["open", "-R", path])
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/dup_trash_inplace", methods=["POST"])
+def dup_trash_inplace():
+    with state_lock:
+        if state.dup_status == "running":
+            return jsonify({"success": False, "error": "Cannot remove duplicates while scan is running.", "count": 0, "refused": []}), 409
+        groups_snapshot = list(state.dup_results or [])
+
+    data = request.get_json(silent=True) or {}
+    source_paths = data.get("source_paths", [])
+    root_folder = data.get("root_folder", "")
+    permanent_delete = bool(data.get("permanent_delete", False))
+    delete_all_redundant = bool(data.get("delete_all_redundant", False))
+
+    if delete_all_redundant and groups_snapshot:
+        source_paths = [
+            f for g in groups_snapshot for f in g.get("files", [])[1:]
+        ]
+
+    if not source_paths or not root_folder:
+        return jsonify({"success": False, "error": "source_paths and root_folder required.", "count": 0, "refused": []}), 400
+
+    config_path = os.path.join(base_dir, "config.json")
+    api = OrganizerAPI(config_path, log_cb, progress_cb)
+    count, refused, bytes_reclaimed = api.trash_inplace_duplicates(
+        source_paths,
+        root_folder,
+        permanent_delete=permanent_delete,
+        groups=groups_snapshot,
+    )
+
+    # Prune removed files from state.dup_results so the UI can immediately
+    # display the updated remaining groups without re-scanning the 2TB drive.
+    remaining_groups = []
+    for g in groups_snapshot:
+        surviving = [f for f in g.get("files", []) if f and os.path.exists(f)]
+        if len(surviving) > 1:
+            remaining_groups.append({"size": g.get("size", 0), "files": surviving})
+
+    with state_lock:
+        state.dup_results = remaining_groups
+
+    return jsonify({
+        "success": True,
+        "count": count,
+        "refused": refused,
+        "bytes_reclaimed": bytes_reclaimed,
+        "permanent_delete": permanent_delete,
+        "remaining_results": remaining_groups,
+    })
+
+
+@app.route("/api/dup_empty_trash", methods=["POST"])
+def dup_empty_trash():
+    data = request.get_json(silent=True) or {}
+    root_folder = data.get("root_folder", "")
+    if not root_folder or not os.path.exists(root_folder):
+        return jsonify({"success": False, "error": "Valid root_folder required."}), 400
+    config_path = os.path.join(base_dir, "config.json")
+    api = OrganizerAPI(config_path, log_cb, progress_cb)
+    files_deleted, bytes_freed, err = api.empty_duplicates_trash(root_folder)
+    if err:
+        return jsonify({"success": False, "error": err, "files_deleted": files_deleted, "bytes_freed": bytes_freed}), 500
+    return jsonify({"success": True, "files_deleted": files_deleted, "bytes_freed": bytes_freed})
+
+
+@app.route("/api/dup_scan_cancel", methods=["POST"])
+def dup_scan_cancel():
+    global active_dup_scanner_cancelled
+    with state_lock:
+        active_dup_scanner_cancelled = True
+        if state.dup_status == "running":
+            state.dup_status = "cancelling"
     return jsonify({"success": True})
 
 

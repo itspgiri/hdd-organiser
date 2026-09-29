@@ -296,6 +296,28 @@ def files_are_identical(path_a: str, path_b: str) -> bool:
         return False
 
 
+def get_part_hash(filepath: str, size: int = 0) -> str:
+    """Fast hash: reads first and last 1MB of large files to prevent HDD thrashing.
+    Stateless and 100% read-only (zero disk writes), safe on completely full drives.
+    """
+    if not _is_regular_file(filepath):
+        return ""
+    h = hashlib.sha256()
+    chunk_size = 1024 * 1024  # 1MB
+    try:
+        with open(filepath, 'rb') as f:
+            actual_size = os.fstat(f.fileno()).st_size
+            if actual_size <= chunk_size * 2:
+                h.update(f.read(chunk_size * 2))
+            else:
+                h.update(f.read(chunk_size))
+                f.seek(-chunk_size, os.SEEK_END)
+                h.update(f.read(chunk_size))
+    except Exception:
+        return ""
+    return h.hexdigest()
+
+
 # Regenerable build output and dependency caches - not worth the transfer time
 # and usually far larger than the project itself.
 #
