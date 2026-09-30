@@ -855,11 +855,11 @@ async function loadDuplicateCleaner() {
 
         if (duplicates.length > 0) {
             let totalSize = duplicates.reduce((acc, curr) => acc + (curr.size || 0), 0);
-            let sizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+            let sizeStr = formatDupBytes(totalSize);
 
             html += `
             <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
-                <strong>Found ${duplicates.length} Duplicate Files (${sizeMB} MB) on Source Drive</strong>
+                <strong>Found ${duplicates.length} Duplicate Files (${sizeStr}) on Source Drive</strong>
                 <button class="btn primary" style="font-size: 11px; padding: 6px 12px;" onclick="trashAllDuplicates()">
                     🗑️ Move ${duplicates.length} Duplicates to Trash
                 </button>
@@ -876,11 +876,11 @@ async function loadDuplicateCleaner() {
 
         if (trashed.length > 0) {
             let trashedSize = trashed.reduce((acc, curr) => acc + (curr.size || 0), 0);
-            let trashedMB = (trashedSize / (1024 * 1024)).toFixed(2);
+            let trashedStr = formatDupBytes(trashedSize);
             html += `
             <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; margin-top: 8px;">
                 <div style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
-                    <strong>♻️ ${trashed.length} Isolated Duplicate(s) in <code>.Duplicates_Trash</code> (${trashedMB} MB)</strong>
+                    <strong>♻️ ${trashed.length} Isolated Duplicate(s) in <code>.Duplicates_Trash</code> (${trashedStr})</strong>
                     <button class="btn secondary" style="font-size: 11px; padding: 6px 12px;" onclick="restoreAllDuplicates()">
                         ♻️ Restore ${trashed.length} File${trashed.length === 1 ? '' : 's'} to Original Folder
                     </button>
@@ -1326,6 +1326,7 @@ async function selectDupFolder() {
 }
 
 let dupPollInterval = null;
+let scannedDupRoot = "";
 
 async function startDuplicateScan() {
     const folder = document.getElementById('dup-source-path').value;
@@ -1340,6 +1341,8 @@ async function startDuplicateScan() {
     document.getElementById('dup-progress-fill').style.width = "0%";
     document.getElementById('dup-progress-percentage').innerText = "0%";
     document.getElementById('dup-current-message').innerText = "Initializing...";
+    const spinner = document.getElementById('dup-status-spinner');
+    if (spinner) spinner.classList.add('animate-spin');
     
     try {
         const response = await fetch('/api/dup_scan_start', {
@@ -1349,14 +1352,17 @@ async function startDuplicateScan() {
         });
         const data = await response.json();
         if (data.success) {
+            scannedDupRoot = folder;
             pollDuplicateScan();
         } else {
             alert(data.error);
             document.getElementById('start-dup-scan-btn').disabled = false;
+            if (spinner) spinner.classList.remove('animate-spin');
         }
     } catch(e) {
         alert("Error starting scan: " + e);
         document.getElementById('start-dup-scan-btn').disabled = false;
+        if (spinner) spinner.classList.remove('animate-spin');
     }
 }
 
@@ -1377,6 +1383,7 @@ function pollDuplicateScan() {
             const fill = document.getElementById('dup-progress-fill');
             const percentTxt = document.getElementById('dup-progress-percentage');
             const msgTxt = document.getElementById('dup-current-message');
+            const spinner = document.getElementById('dup-status-spinner');
 
             const progressVal = Number(data.progress ?? 0);
             const totalVal = Number(data.total ?? 0);
@@ -1390,12 +1397,15 @@ function pollDuplicateScan() {
                 clearInterval(dupPollInterval);
                 dupPollInterval = null;
                 document.getElementById('start-dup-scan-btn').disabled = false;
+                if (spinner) spinner.classList.remove('animate-spin');
 
                 if (data.status === 'complete') {
                     if (msgTxt) msgTxt.innerText = "Loading duplicate groups into view...";
                     const fullRes = await fetch('/api/dup_scan_status?include_results=1');
                     const fullData = await fullRes.json();
                     initDuplicateResults(fullData.results || []);
+                } else if (data.status === 'cancelled') {
+                    if (msgTxt) msgTxt.innerText = "Scan cancelled.";
                 } else if (data.status === 'error') {
                     alert("Scan failed: " + data.message);
                 }
@@ -1423,9 +1433,9 @@ let selectedDupPaths = new Set();
 let dupPathToSize = new Map();
 let currentDupRenderLimit = 150;
 
-const DUP_VIDEO_EXTS = new Set(['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v', '.wmv', '.flv', '.3gp', '.mts', '.m2ts']);
-const DUP_PHOTO_EXTS = new Set(['.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp', '.gif', '.bmp', '.tiff', '.tif', '.cr2', '.cr3', '.nef', '.arw', '.dng', '.orf', '.rw2']);
-const DUP_ARCHIVE_EXTS = new Set(['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.tgz', '.dmg', '.iso', '.pkg']);
+const DUP_VIDEO_EXTS = new Set(['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v', '.wmv', '.flv', '.3gp', '.mts', '.m2ts', '.mpg', '.mpeg']);
+const DUP_PHOTO_EXTS = new Set(['.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp', '.gif', '.bmp', '.tiff', '.tif', '.avif', '.cr2', '.cr3', '.nef', '.arw', '.dng', '.orf', '.rw2', '.raf']);
+const DUP_ARCHIVE_EXTS = new Set(['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.zst', '.tgz', '.tbz2', '.txz', '.dmg', '.iso', '.pkg']);
 
 function formatDupBytes(bytes) {
     const b = Number(bytes || 0);
@@ -1569,7 +1579,7 @@ function renderDuplicateGroupsList() {
         return;
     }
 
-    const rootFolder = (document.getElementById('dup-source-path').value || "").replace(/\/+$/, "");
+    const rootFolder = (scannedDupRoot || document.getElementById('dup-source-path').value || "").replace(/\/+$/, "");
     const visibleGroupIndices = filteredDupIndices.slice(0, currentDupRenderLimit);
 
     let html = "";
@@ -1685,13 +1695,28 @@ function onDupCheckboxToggle(checkbox, groupIdx, filePath) {
 }
 
 function selectAllDuplicates(selectRedundant) {
-    selectedDupPaths.clear();
-    if (selectRedundant) {
-        currentDupResults.forEach(group => {
+    const isFiltered = filteredDupIndices.length !== currentDupResults.length;
+    if (isFiltered) {
+        filteredDupIndices.forEach(gIdx => {
+            const group = currentDupResults[gIdx];
+            if (!group) return;
             (group.files || []).forEach((f, idx) => {
-                if (idx > 0) selectedDupPaths.add(f);
+                if (selectRedundant && idx > 0) {
+                    selectedDupPaths.add(f);
+                } else {
+                    selectedDupPaths.delete(f);
+                }
             });
         });
+    } else {
+        selectedDupPaths.clear();
+        if (selectRedundant) {
+            currentDupResults.forEach(group => {
+                (group.files || []).forEach((f, idx) => {
+                    if (idx > 0) selectedDupPaths.add(f);
+                });
+            });
+        }
     }
     renderDuplicateGroupsList();
     updateDupMetricsUI();
@@ -1699,11 +1724,15 @@ function selectAllDuplicates(selectRedundant) {
 
 async function revealDupFile(path) {
     try {
-        await fetch('/api/dup_reveal', {
+        const res = await fetch('/api/dup_reveal', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path: path })
         });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            alert(data.error || "Could not reveal file in Finder.");
+        }
     } catch (e) {
         console.error("Failed to reveal file", e);
     }
@@ -1715,7 +1744,7 @@ function showMoreDuplicateGroups() {
 }
 
 async function trashSelectedDuplicates(permanentDelete = false) {
-    const rootFolder = document.getElementById('dup-source-path').value;
+    const rootFolder = (scannedDupRoot || document.getElementById('dup-source-path').value || "").trim();
     const sourcePaths = Array.from(selectedDupPaths);
 
     if (sourcePaths.length === 0) {
@@ -1778,7 +1807,7 @@ async function trashSelectedDuplicates(permanentDelete = false) {
 }
 
 async function emptyDuplicatesTrash() {
-    const rootFolder = document.getElementById('dup-source-path').value;
+    const rootFolder = (scannedDupRoot || document.getElementById('dup-source-path').value || "").trim();
     if (!rootFolder) {
         alert("Please select the scanned folder first.");
         return;

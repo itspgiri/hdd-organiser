@@ -130,7 +130,7 @@ class OrganizerAPI:
     # Serialises the duplicates utility's removals (quarantine, permanent
     # delete, emptying .Duplicates_Trash) across every instance; see
     # trash_inplace_duplicates (audit P2-04).
-    _dup_removal_lock = threading.Lock()
+    _dup_removal_lock = threading.RLock()
 
     def __init__(
         self,
@@ -887,6 +887,17 @@ class OrganizerAPI:
             ".trash", ".trashes", ".temporaryitems", ".documentrevisions-v100",
             ".mobilebackups", "backups.backupdb",
             ".dropbox.cache", ".stversions",
+            "deriveddata", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+            ".tox", ".nox", ".npm", ".yarn", ".pnpm-store",
+        }
+
+        # Top-level macOS system/device/firmlink directories to skip when
+        # the user scans "/" (root of the boot drive) so we only scan user data
+        # instead of crawling the OS kernel, firmlinks, and /dev.
+        ROOT_MACOS_SKIP_DIRS = {
+            "System", "Library", "Applications", "Volumes", "private", "dev",
+            "cores", "usr", "bin", "sbin", "opt", "etc", "var", "tmp", "net",
+            "home", ".vol", ".file",
         }
 
         size_groups: Dict[int, List[str]] = {}
@@ -895,19 +906,42 @@ class OrganizerAPI:
         seen_inodes = set()
 
         folder_abs = os.path.abspath(os.path.expanduser(folder_abs))
+        if folder_abs == "/":
+            self.log_cb(
+                "Scanning macOS root '/': automatically skipping OS/system folders "
+                "(/System, /Library, /Applications, ~/Library) to protect system files."
+            )
+
+        def _is_macos_user_library(parent_dir: str, dirname: str) -> bool:
+            if dirname != "Library":
+                return False
+            lib_path = os.path.join(parent_dir, dirname)
+            if folder_abs == lib_path or folder_abs.startswith(lib_path + os.sep):
+                return False
+            if os.path.dirname(parent_dir) == "/Users":
+                return True
+            return (
+                os.path.isdir(os.path.join(lib_path, "Application Support"))
+                and os.path.isdir(os.path.join(lib_path, "Caches"))
+            ) or os.path.isdir(os.path.join(lib_path, "Containers"))
 
         for root, dirs, files in os.walk(folder_abs):
             if self.cancelled:
                 return []
 
             try:
-                root_real = os.path.realpath(root)
+                st_root = os.stat(root)
+                dir_key = (
+                    (st_root.st_dev, st_root.st_ino)
+                    if (st_root.st_dev and st_root.st_ino)
+                    else os.path.realpath(root)
+                )
             except OSError:
-                root_real = root
-            if root_real in seen_dirs:
+                dir_key = root
+            if dir_key in seen_dirs:
                 dirs.clear()
                 continue
-            seen_dirs.add(root_real)
+            seen_dirs.add(dir_key)
 
             unpruned_dirs = list(dirs)
             items_set = set(unpruned_dirs) | set(files)
@@ -933,6 +967,8 @@ class OrganizerAPI:
                 d for d in dirs
                 if d not in SKIP_SYSTEM_DIRS
                 and d not in SKIP_ORGANIZER_DIRS
+                and (root != "/" or d not in ROOT_MACOS_SKIP_DIRS)
+                and not _is_macos_user_library(root, d)
                 and not d.startswith(".unzipped_")
                 and d != ".Duplicates_Trash"
                 and not d.lower().endswith(PACKAGE_BUNDLE_EXTS)
@@ -963,7 +999,7 @@ class OrganizerAPI:
 
                     size_groups.setdefault(sz, []).append(path)
                     scanned_files += 1
-                    if scanned_files % 300 == 0:
+                    if scanned_files % 500 == 0:
                         self._emit_progress(
                             0, 0,
                             f"Phase 1/2: Scanning drive... ({scanned_files:,} files inspected)"
@@ -976,56 +1012,219 @@ class OrganizerAPI:
         self.log_cb(
             f"Found {len(candidate_sizes):,} file sizes ({total_candidates:,} files) with potential duplicates. Hashing..."
         )
+        if not candidate_sizes or self.cancelled:
+            return []
 
-        copy_Copy_re = re.compile(r"(?:\bcopy\b|\(\d+\)|[ _-]\d+)$", re.IGNORECASE)
+        import hashlib
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        def _original_sort_key(p: str):
+        explicit_copy_re = re.compile(r"(?:\bcopy\b|\(\d+\)| \d{1,3}$)", re.IGNORECASE)
+        suffix_num_re = re.compile(r"^(.+?)[ _-](\d+)$")
+
+        def _original_sort_key(p: str, group_paths: List[str]):
             stem = os.path.splitext(os.path.basename(p))[0]
-            looks_like_copy = 1 if copy_Copy_re.search(stem) else 0
+            looks_like_copy = 1 if explicit_copy_re.search(stem) else 0
+            if not looks_like_copy:
+                m = suffix_num_re.match(stem)
+                if m:
+                    base_lower = m.group(1).lower()
+                    group_stems = {
+                        os.path.splitext(os.path.basename(gp))[0].lower()
+                        for gp in group_paths
+                        if gp != p
+                    }
+                    if base_lower in group_stems:
+                        looks_like_copy = 1
             depth = p.count(os.sep)
             return (looks_like_copy, depth, len(p), p)
 
-        duplicate_groups = []
+        # Tier 1: Fast 8 KB micro-hash (first 4 KB + last 4 KB via blake2b).
+        # Eliminates >98% of non-duplicate same-size files while reading 256x
+        # less data than a 2 MB sample hash. For files <= 8 KB, this already
+        # reads 100% of the file!
+        def _get_micro_hash(filepath: str, size: int) -> str:
+            if self.cancelled:
+                return ""
+            try:
+                h = hashlib.blake2b(digest_size=16)
+                with open(filepath, "rb") as fh:
+                    if size <= 8192:
+                        h.update(fh.read(8192))
+                    else:
+                        h.update(fh.read(4096))
+                        fh.seek(size - 4096)
+                        h.update(fh.read(4096))
+                return h.hexdigest()
+            except OSError:
+                return ""
+
+        # Tier 2: 2 MB sample hash (first 1 MB + middle 64 KB + last 1 MB)
+        # computed ONLY for files > 8 KB that collided on the 8 KB micro-hash.
+        def _get_sample_hash(filepath: str, size: int) -> str:
+            if self.cancelled:
+                return ""
+            chunk = 1024 * 1024
+            try:
+                h = hashlib.blake2b(digest_size=20)
+                with open(filepath, "rb") as fh:
+                    if size <= chunk * 2:
+                        while True:
+                            if self.cancelled:
+                                return ""
+                            buf = fh.read(chunk)
+                            if not buf:
+                                break
+                            h.update(buf)
+                    else:
+                        h.update(fh.read(chunk))
+                        if self.cancelled:
+                            return ""
+                        fh.seek(size // 2)
+                        h.update(fh.read(65536))
+                        if self.cancelled:
+                            return ""
+                        fh.seek(size - chunk)
+                        h.update(fh.read(chunk))
+                return h.hexdigest()
+            except OSError:
+                return ""
+
+        # Tier 3 helper: full streaming hash for buckets with >2 large files
+        # so each file is read once (O(k)) instead of O(k^2) pairwise reads.
+        def _get_full_hash(filepath: str) -> str:
+            if self.cancelled:
+                return ""
+            try:
+                h = hashlib.blake2b(digest_size=32)
+                with open(filepath, "rb") as fh:
+                    while True:
+                        if self.cancelled:
+                            return ""
+                        buf = fh.read(1024 * 1024)
+                        if not buf:
+                            break
+                        h.update(buf)
+                return h.hexdigest()
+            except OSError:
+                return ""
+
+        progress_lock = threading.Lock()
         processed = 0
 
-        # Check largest candidate sizes first so progress reflects heavy I/O accurately
-        for sz, paths in sorted(candidate_sizes.items(), key=lambda kv: kv[0], reverse=True):
+        def _advance_progress(delta: int, force: bool = False):
+            nonlocal processed
+            with progress_lock:
+                processed += delta
+                cur = processed
+            if force or cur % 50 == 0 or cur >= total_candidates:
+                self._emit_progress(
+                    cur,
+                    max(1, total_candidates),
+                    f"Phase 2/2: Verifying duplicates... ({cur:,} / {total_candidates:,} candidate files)"
+                )
+
+        def _process_size_bucket(sz: int, paths: List[str]) -> List[dict]:
             if self.cancelled:
-                break
-            hash_groups: Dict[str, List[str]] = {}
+                return []
+            micro_groups: Dict[str, List[str]] = {}
             for p in paths:
                 if self.cancelled:
-                    break
-                phash = get_part_hash(p, sz)
-                if phash:
-                    hash_groups.setdefault(phash, []).append(p)
-                processed += 1
-                if processed % 25 == 0 or sz >= 50 * 1024 * 1024:
-                    self._emit_progress(
-                        processed,
-                        max(1, total_candidates),
-                        f"Phase 2/2: Verifying duplicates... ({processed:,} / {total_candidates:,} candidate files)"
-                    )
+                    return []
+                mh = _get_micro_hash(p, sz)
+                if mh:
+                    micro_groups.setdefault(mh, []).append(p)
+            _advance_progress(len(paths), force=(sz >= 10 * 1024 * 1024))
 
-            for phash, hpaths in hash_groups.items():
-                if len(hpaths) > 1:
-                    exact_groups: List[List[str]] = []
+            # Collect candidate sub-groups that survived Tier 1 (and Tier 2 if sz > 8192)
+            verify_buckets: List[List[str]] = []
+            for mpaths in micro_groups.values():
+                if self.cancelled:
+                    return []
+                if len(mpaths) < 2:
+                    continue
+                if sz <= 8192:
+                    verify_buckets.append(mpaths)
+                else:
+                    sample_groups: Dict[str, List[str]] = {}
+                    for p in mpaths:
+                        if self.cancelled:
+                            return []
+                        sh = _get_sample_hash(p, sz)
+                        if sh:
+                            sample_groups.setdefault(sh, []).append(p)
+                    for spaths in sample_groups.values():
+                        if len(spaths) > 1:
+                            verify_buckets.append(spaths)
+
+            found_groups: List[dict] = []
+            for hpaths in verify_buckets:
+                if self.cancelled:
+                    return []
+                # If >2 large files (>2 MB) share the sample hash, pre-group by
+                # full streaming hash so each file is read once before byte verification.
+                sub_buckets: List[List[str]]
+                if len(hpaths) > 2 and sz > 2 * 1024 * 1024:
+                    full_map: Dict[str, List[str]] = {}
                     for hp in hpaths:
                         if self.cancelled:
-                            break
+                            return []
+                        fh_str = _get_full_hash(hp)
+                        if fh_str:
+                            full_map.setdefault(fh_str, []).append(hp)
+                    sub_buckets = [fp for fp in full_map.values() if len(fp) > 1]
+                else:
+                    sub_buckets = [hpaths]
+
+                for sb in sub_buckets:
+                    if self.cancelled:
+                        return []
+                    exact_groups: List[List[str]] = []
+                    for hp in sb:
+                        if self.cancelled:
+                            return []
                         matched = False
                         for eg in exact_groups:
-                            if files_are_identical(hp, eg[0]):
+                            if files_are_identical(hp, eg[0], cancel_check=lambda: self.cancelled):
                                 eg.append(hp)
                                 matched = True
                                 break
+                            if self.cancelled:
+                                return []
                         if not matched:
                             exact_groups.append([hp])
 
                     for eg in exact_groups:
                         if len(eg) > 1:
-                            eg_sorted = sorted(eg, key=_original_sort_key)
-                            duplicate_groups.append({"size": sz, "files": eg_sorted})
+                            eg_sorted = sorted(eg, key=lambda p, _eg=eg: _original_sort_key(p, _eg))
+                            found_groups.append({"size": sz, "files": eg_sorted})
+            return found_groups
+
+        duplicate_groups: List[dict] = []
+        # Process smaller candidate sizes first across parallel worker threads so
+        # progress climbs immediately and multi-core SSD I/O stays saturated.
+        sorted_buckets = sorted(candidate_sizes.items(), key=lambda kv: kv[0])
+        max_workers = min(8, max(2, (os.cpu_count() or 4) * 2))
+
+        self._emit_progress(
+            0,
+            max(1, total_candidates),
+            f"Phase 2/2: Verifying duplicates... (0 / {total_candidates:,} candidate files)"
+        )
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [
+                pool.submit(_process_size_bucket, sz, paths)
+                for sz, paths in sorted_buckets
+            ]
+            for fut in as_completed(futures):
+                if self.cancelled:
+                    break
+                res_groups = fut.result()
+                if res_groups:
+                    duplicate_groups.extend(res_groups)
+
+        if self.cancelled:
+            return []
 
         duplicate_groups.sort(key=lambda g: g["size"] * (len(g["files"]) - 1), reverse=True)
         self.log_cb(f"Found {len(duplicate_groups):,} duplicate groups.")
@@ -1074,27 +1273,46 @@ class OrganizerAPI:
         from .categorizer import split_filename_ext
         from .file_ops import _force_remove, files_are_identical
 
-        requested_set = {os.path.abspath(p) for p in source_paths if p}
+        if not isinstance(root_folder, str) or not root_folder.strip():
+            return 0, ["Valid root_folder required."], 0
+
+        root_abs = os.path.abspath(os.path.expanduser(root_folder.strip()))
+        root_real = os.path.realpath(root_abs)
+
+        def _norm_key(p: str) -> str:
+            return os.path.realpath(os.path.abspath(os.path.expanduser(p)))
+
+        requested_set = {_norm_key(p) for p in source_paths if isinstance(p, str) and p.strip()}
         if not requested_set:
             return 0, [], 0
 
         # Build a map of file -> surviving twin from scan groups
         twin_map: Dict[str, str] = {}
+        keepers_set: set = set()
         if groups:
             for g in groups:
-                g_files = [os.path.abspath(f) for f in g.get("files", []) if f]
+                g_files = [
+                    os.path.abspath(os.path.expanduser(f))
+                    for f in g.get("files", [])
+                    if isinstance(f, str) and f.strip()
+                ]
                 existing_g = [f for f in g_files if os.path.exists(f)]
                 if len(existing_g) < 2:
                     continue
-                # Find a member NOT requested for deletion; if user selected ALL members
-                # in the group, force-preserve existing_g[0] so at least 1 copy survives!
-                unselected = [f for f in existing_g if f not in requested_set]
-                keeper = unselected[0] if unselected else existing_g[0]
+                # Find a member NOT requested for deletion (or an already-designated keeper
+                # if groups overlap); if user selected ALL members, force-preserve existing_g[0].
+                existing_keepers = [f for f in existing_g if _norm_key(f) in keepers_set]
+                unselected = [f for f in existing_g if _norm_key(f) not in requested_set]
+                keeper = existing_keepers[0] if existing_keepers else (unselected[0] if unselected else existing_g[0])
+                keeper_key = _norm_key(keeper)
+                keepers_set.add(keeper_key)
+                twin_map.pop(keeper_key, None)
                 for f in existing_g:
-                    if f != keeper and f in requested_set:
-                        twin_map[f] = keeper
+                    f_key = _norm_key(f)
+                    if f_key != keeper_key and f_key not in keepers_set and f_key in requested_set:
+                        twin_map[f_key] = keeper
 
-        trash_dir = os.path.join(root_folder, ".Duplicates_Trash")
+        trash_dir = os.path.join(root_abs, ".Duplicates_Trash")
         if not permanent_delete:
             if os.path.islink(trash_dir):
                 # Would move files out of the scanned folder, possibly to
@@ -1116,48 +1334,61 @@ class OrganizerAPI:
         removed_count = 0
         bytes_reclaimed = 0
         refused = []
-        free_before = self._volume_free_bytes(root_folder) if permanent_delete else None
+        free_before = self._volume_free_bytes(root_abs) if permanent_delete else None
 
         for raw_path in source_paths:
-            if not raw_path:
+            if not isinstance(raw_path, str) or not raw_path.strip():
                 continue
-            file_path = os.path.abspath(raw_path)
+            file_path = os.path.abspath(os.path.expanduser(raw_path.strip()))
             if not os.path.exists(file_path):
                 continue
+            file_key = _norm_key(file_path)
 
-            # Verify a surviving twin exists and matches
-            twin = twin_map.get(file_path, "")
-            if groups is not None:
-                if not twin:
+            try:
+                inside_root = (
+                    file_key != root_real
+                    and os.path.commonpath([root_real, file_key]) == root_real
+                )
+            except ValueError:
+                inside_root = False
+            if not inside_root:
+                refused.append(
+                    f"{os.path.basename(file_path)}: outside the scanned folder - kept safe."
+                )
+                continue
+
+            # Always verify a surviving twin exists and matches byte-for-byte
+            twin = twin_map.get(file_key, "")
+            if not twin:
+                refused.append(
+                    f"{os.path.basename(file_path)}: preserved as the surviving original copy in its group."
+                )
+                continue
+            if not os.path.exists(twin):
+                refused.append(
+                    f"{os.path.basename(file_path)}: surviving original ({os.path.basename(twin)}) is missing - kept safe."
+                )
+                continue
+            try:
+                if os.path.samefile(file_path, twin):
                     refused.append(
-                        f"{os.path.basename(file_path)}: preserved as the surviving original copy in its group."
+                        f"{os.path.basename(file_path)}: points to the exact same file as original - kept safe."
                     )
                     continue
-                if not os.path.exists(twin):
+                # The sampled hash only reads the first and last 1 MB, so
+                # a file changed in the middle after the scan (same size)
+                # still matched and was deleted although it was no longer
+                # a duplicate (audit P2-02). Compare every byte instead.
+                if not files_are_identical(file_path, twin):
                     refused.append(
-                        f"{os.path.basename(file_path)}: surviving original ({os.path.basename(twin)}) is missing - kept safe."
+                        f"{os.path.basename(file_path)}: no longer matches original copy - kept safe."
                     )
                     continue
-                try:
-                    if os.path.samefile(file_path, twin):
-                        refused.append(
-                            f"{os.path.basename(file_path)}: points to the exact same file as original - kept safe."
-                        )
-                        continue
-                    # The sampled hash only reads the first and last 1 MB, so
-                    # a file changed in the middle after the scan (same size)
-                    # still matched and was deleted although it was no longer
-                    # a duplicate (audit P2-02). Compare every byte instead.
-                    if not files_are_identical(file_path, twin):
-                        refused.append(
-                            f"{os.path.basename(file_path)}: no longer matches original copy - kept safe."
-                        )
-                        continue
-                except OSError:
-                    refused.append(
-                        f"{os.path.basename(file_path)}: could not verify original copy - kept safe."
-                    )
-                    continue
+            except OSError:
+                refused.append(
+                    f"{os.path.basename(file_path)}: could not verify original copy - kept safe."
+                )
+                continue
 
             try:
                 file_sz = os.path.getsize(file_path)
@@ -1178,7 +1409,7 @@ class OrganizerAPI:
                     counter = 1
                     name, ext = split_filename_ext(filename)
                     ext_dot = ext if ext.startswith(".") else (f".{ext}" if ext else "")
-                    while os.path.exists(target_path):
+                    while os.path.lexists(target_path):
                         target_path = os.path.join(trash_dir, f"{name}_{counter}{ext_dot}")
                         counter += 1
 
@@ -1206,7 +1437,7 @@ class OrganizerAPI:
 
         if permanent_delete:
             bytes_reclaimed = self._space_actually_freed(
-                bytes_reclaimed, free_before, root_folder, f"Deleted {removed_count:,} duplicate(s)"
+                bytes_reclaimed, free_before, root_abs, f"Deleted {removed_count:,} duplicate(s)"
             )
         return removed_count, refused, bytes_reclaimed
 
@@ -1276,7 +1507,7 @@ class OrganizerAPI:
             for f in files:
                 fp = os.path.join(root, f)
                 try:
-                    sz = os.path.getsize(fp)
+                    sz = 0 if os.path.islink(fp) else os.path.getsize(fp)
                 except OSError:
                     sz = 0
                 try:
@@ -1289,7 +1520,11 @@ class OrganizerAPI:
             for d in dirs:
                 dp = os.path.join(root, d)
                 try:
-                    os.rmdir(dp)
+                    if os.path.islink(dp):
+                        _clear_immutable(dp)
+                        os.unlink(dp)
+                    else:
+                        os.rmdir(dp)
                 except OSError as e:
                     first_error = first_error or str(e)
         shutil.rmtree(trash_dir, ignore_errors=True)
@@ -1323,10 +1558,13 @@ class OrganizerAPI:
 
     def get_duplicate_records(self, dest_abs: str):
         """Returns list of duplicate source files recorded during run."""
-        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db")
+        dest_norm = os.path.abspath(os.path.expanduser(dest_abs.strip())) if isinstance(dest_abs, str) and dest_abs.strip() else ""
+        if not dest_norm:
+            return []
+        db_path = os.path.join(dest_norm, ".organizer_checkpoint.db")
         if not os.path.exists(db_path):
             return []
-        staging_prefix = os.path.realpath(os.path.join(dest_abs, ".organizer_staging")) + os.sep
+        staging_prefix = os.path.realpath(os.path.join(dest_norm, ".organizer_staging")) + os.sep
         conn = sqlite3.connect(db_path, timeout=30.0)
         try:
             cursor = conn.execute(
@@ -1370,26 +1608,39 @@ class OrganizerAPI:
 
         Returns (trashed_count, refused_list).
         """
-        valid_paths = [p for p in source_paths if p and os.path.exists(p)]
+        with OrganizerAPI._dup_removal_lock:
+            return self._trash_duplicates_locked(source_paths, dest_abs)
+
+    def _trash_duplicates_locked(self, source_paths: list, dest_abs: str = ""):
+        valid_paths = [
+            os.path.abspath(os.path.expanduser(p.strip()))
+            for p in source_paths
+            if isinstance(p, str) and p.strip() and os.path.exists(os.path.expanduser(p.strip()))
+        ]
         if not valid_paths:
             return 0, []
 
-        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db") if dest_abs else ""
-        if not dest_abs or not os.path.exists(db_path):
+        dest_norm = os.path.abspath(os.path.expanduser(dest_abs.strip())) if isinstance(dest_abs, str) and dest_abs.strip() else ""
+        db_path = os.path.join(dest_norm, ".organizer_checkpoint.db") if dest_norm else ""
+        if not dest_norm or not os.path.exists(db_path):
             refused = [
                 f"{os.path.basename(p)}: no verified destination checkpoint database provided - left in place."
                 for p in valid_paths
             ]
             return 0, refused
 
-        # Look up the surviving twin recorded for each duplicate.
+        # Look up the surviving twin recorded for each duplicate, along with its DB primary key.
         twins: Dict[str, str] = {}
-        for rec in self.get_duplicate_records(dest_abs):
+        canonical_src: Dict[str, str] = {}
+        for rec in self.get_duplicate_records(dest_norm):
             sp = rec["source_path"]
             dup_of = rec.get("duplicate_of") or ""
             twins[sp] = dup_of
+            canonical_src[sp] = sp
             try:
-                twins[os.path.realpath(sp)] = dup_of
+                sp_real = os.path.realpath(sp)
+                twins[sp_real] = dup_of
+                canonical_src[sp_real] = sp
             except OSError:
                 pass
 
@@ -1397,7 +1648,10 @@ class OrganizerAPI:
         trashed_pairs: List[Tuple[str, str]] = []
         refused = []
         for file_path in valid_paths:
-            twin = twins.get(file_path) or twins.get(os.path.realpath(file_path), "")
+            if not os.path.exists(file_path):
+                continue
+            file_real = os.path.realpath(file_path)
+            twin = twins.get(file_path) or twins.get(file_real, "")
 
             if not twin:
                 refused.append(
@@ -1419,7 +1673,10 @@ class OrganizerAPI:
                     )
                     continue
             except OSError:
-                pass
+                refused.append(
+                    f"{os.path.basename(file_path)}: could not verify destination copy - left in place."
+                )
+                continue
             if not files_are_identical(file_path, twin):
                 refused.append(
                     f"{os.path.basename(file_path)}: no longer byte-identical to the "
@@ -1427,11 +1684,17 @@ class OrganizerAPI:
                 )
                 continue
 
+            parent_dir = os.path.dirname(file_path)
+            trash_dir = os.path.join(parent_dir, ".Duplicates_Trash")
+            if os.path.islink(trash_dir):
+                refused.append(
+                    f"{os.path.basename(file_path)}: {trash_dir} is a symbolic link - left in place."
+                )
+                continue
+
             moved_ok = False
             recorded_trash_path = ""
             try:
-                parent_dir = os.path.dirname(file_path)
-                trash_dir = os.path.join(parent_dir, ".Duplicates_Trash")
                 os.makedirs(trash_dir, exist_ok=True)
 
                 filename = os.path.basename(file_path)
@@ -1441,38 +1704,23 @@ class OrganizerAPI:
                 counter = 1
                 name, ext = split_filename_ext(filename)
                 ext_dot = ext if ext.startswith(".") else (f".{ext}" if ext else "")
-                while os.path.exists(target_path):
+                while os.path.lexists(target_path):
                     target_path = os.path.join(trash_dir, f"{name}_{counter}{ext_dot}")
                     counter += 1
 
-                shutil.move(file_path, target_path)
+                # Atomic rename within the same directory/volume; never copies
+                # data into .Duplicates_Trash when a file is locked or read-only,
+                # and never falls back to AppleScript Finder delete.
+                os.rename(file_path, target_path)
                 trashed_count += 1
                 moved_ok = True
                 recorded_trash_path = target_path
-            except Exception:
-                # Fallback to AppleScript if direct filesystem move fails; pass path via argv
-                try:
-                    script = (
-                        "on run argv\n"
-                        "  tell application \"Finder\" to delete (POSIX file (item 1 of argv))\n"
-                        "end run"
-                    )
-                    res = subprocess.run(
-                        ["osascript", "-e", script, file_path],
-                        capture_output=True,
-                        text=True,
-                        timeout=15,
-                    )
-                    if res.returncode == 0:
-                        trashed_count += 1
-                        moved_ok = True
-                    else:
-                        refused.append(f"{os.path.basename(file_path)}: could not be moved.")
-                except Exception:
-                    refused.append(f"{os.path.basename(file_path)}: could not be moved.")
+            except Exception as e:
+                refused.append(f"{os.path.basename(file_path)}: could not be moved ({e}).")
 
             if moved_ok:
-                trashed_pairs.append((recorded_trash_path, file_path))
+                db_src = canonical_src.get(file_path) or canonical_src.get(file_real, file_path)
+                trashed_pairs.append((recorded_trash_path, db_src))
 
         if trashed_pairs and os.path.exists(db_path):
             try:
@@ -1499,8 +1747,9 @@ class OrganizerAPI:
 
     def get_trashed_duplicates(self, dest_abs: str):
         """Returns list of duplicate source files currently isolated in .Duplicates_Trash."""
-        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db") if dest_abs else ""
-        if not dest_abs or not os.path.exists(db_path):
+        dest_norm = os.path.abspath(os.path.expanduser(dest_abs.strip())) if isinstance(dest_abs, str) and dest_abs.strip() else ""
+        db_path = os.path.join(dest_norm, ".organizer_checkpoint.db") if dest_norm else ""
+        if not dest_norm or not os.path.exists(db_path):
             return []
         conn = sqlite3.connect(db_path, timeout=30.0)
         try:
@@ -1539,16 +1788,22 @@ class OrganizerAPI:
         Restores duplicate files from .Duplicates_Trash back to their original source locations.
         Returns (restored_count, refused_list).
         """
-        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db") if dest_abs else ""
-        if not dest_abs or not os.path.exists(db_path):
+        with OrganizerAPI._dup_removal_lock:
+            return self._restore_duplicates_locked(dest_abs, source_paths)
+
+    def _restore_duplicates_locked(self, dest_abs: str, source_paths: Optional[list] = None):
+        dest_norm = os.path.abspath(os.path.expanduser(dest_abs.strip())) if isinstance(dest_abs, str) and dest_abs.strip() else ""
+        db_path = os.path.join(dest_norm, ".organizer_checkpoint.db") if dest_norm else ""
+        if not dest_norm or not os.path.exists(db_path):
             return 0, ["No verified destination checkpoint database found."]
 
-        trashed_records = self.get_trashed_duplicates(dest_abs)
+        trashed_records = self.get_trashed_duplicates(dest_norm)
         if not trashed_records:
             return 0, []
 
         if source_paths:
-            requested = set(source_paths) | {os.path.realpath(p) for p in source_paths if p}
+            expanded = [os.path.expanduser(p.strip()) for p in source_paths if isinstance(p, str) and p.strip()]
+            requested = set(expanded) | {os.path.abspath(p) for p in expanded} | {os.path.realpath(p) for p in expanded}
             trashed_records = [
                 r for r in trashed_records
                 if r["source_path"] in requested or os.path.realpath(r["source_path"]) in requested
@@ -1561,12 +1816,16 @@ class OrganizerAPI:
         for rec in trashed_records:
             src_p = rec["source_path"]
             tr_p = rec["trashed_path"]
+            trash_dir = os.path.dirname(tr_p)
+            if os.path.islink(trash_dir):
+                refused.append(f"{os.path.basename(src_p)}: {trash_dir} is a symbolic link - refused.")
+                continue
             if not os.path.exists(tr_p):
                 refused.append(f"{os.path.basename(src_p)}: trashed file no longer exists in .Duplicates_Trash.")
                 continue
 
-            if os.path.exists(src_p):
-                if files_are_identical(tr_p, src_p):
+            if os.path.lexists(src_p):
+                if not os.path.islink(src_p) and files_are_identical(tr_p, src_p):
                     try:
                         os.remove(tr_p)
                         restored_count += 1
@@ -1581,14 +1840,13 @@ class OrganizerAPI:
             else:
                 try:
                     os.makedirs(os.path.dirname(src_p), exist_ok=True)
-                    shutil.move(tr_p, src_p)
+                    os.rename(tr_p, src_p)
                     restored_count += 1
                     restored_sources.append(src_p)
                 except Exception as e:
                     refused.append(f"{os.path.basename(src_p)}: could not be restored ({e}).")
                     continue
 
-            trash_dir = os.path.dirname(tr_p)
             try:
                 if os.path.basename(trash_dir) == ".Duplicates_Trash" and os.path.isdir(trash_dir) and not os.listdir(trash_dir):
                     os.rmdir(trash_dir)
@@ -1620,8 +1878,9 @@ class OrganizerAPI:
         Fast automated verification checker.
         Verifies existence, file size, and sample SHA-256 hashes of copied files in <1 second.
         """
-        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db")
-        if not os.path.exists(db_path):
+        dest_abs = os.path.abspath(os.path.expanduser(dest_abs.strip())) if isinstance(dest_abs, str) and dest_abs.strip() else ""
+        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db") if dest_abs else ""
+        if not dest_abs or not os.path.exists(db_path):
             return {
                 "success": False,
                 "error": "No checkpoint database found at destination."
@@ -1771,8 +2030,9 @@ class OrganizerAPI:
         an external HDD holding 400,000 files. The automatic pre-flight pass
         therefore runs with deep=False, checking only existence and size.
         """
-        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db")
-        if not os.path.exists(db_path):
+        dest_abs = os.path.abspath(os.path.expanduser(dest_abs.strip())) if isinstance(dest_abs, str) and dest_abs.strip() else ""
+        db_path = os.path.join(dest_abs, ".organizer_checkpoint.db") if dest_abs else ""
+        if not dest_abs or not os.path.exists(db_path):
             return {"success": False, "error": "No checkpoint database found at destination."}
 
         try:
@@ -1876,14 +2136,19 @@ class OrganizerAPI:
                     deleted_count += 1
 
             # Second pass: purge DUPLICATE_SKIPPED records whose surviving twin
-            # is missing or was just invalidated/deleted above.
+            # is missing or was just invalidated/deleted above. If the duplicate
+            # was previously moved to .Duplicates_Trash, restore it first so the
+            # next run can copy it to replace the lost destination copy.
             for source_path, dest_path, size, part_hash, status, duplicate_of in rows:
                 if dest_path != "DUPLICATE_SKIPPED":
                     continue
-                if status == "trashed":
-                    continue
                 if duplicate_of and (not os.path.exists(duplicate_of) or duplicate_of in bad_dest_paths):
-                    purged_sources.append(source_path)
+                    if status == "trashed":
+                        restored_n, _ = self.restore_duplicates(dest_abs, [source_path])
+                        if restored_n > 0 or os.path.exists(source_path):
+                            purged_sources.append(source_path)
+                    else:
+                        purged_sources.append(source_path)
         finally:
             engine.close()
 

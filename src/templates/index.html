@@ -47,45 +47,67 @@
         <div class="p-6 sm:p-10 relative">
             <!-- GUIDE VIEW -->
             <div id="guide-view" class="view active">
-                <div class="text-center mb-10">
-                    <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 mb-5 shadow-inner">
-                        <i data-lucide="hard-drive" class="pointer-events-none w-8 h-8"></i>
+                <div class="text-center mb-6">
+                    <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 mb-3 shadow-inner">
+                        <i data-lucide="hard-drive" class="pointer-events-none w-7 h-7"></i>
                     </div>
-                    <h1 class="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-2">Drive Organizer</h1>
-                    <p class="text-slate-500 dark:text-slate-400 text-lg">Effortlessly sort your messy folders safely.</p>
+                    <h1 class="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-1">Drive Organizer</h1>
+                    <p class="text-slate-500 dark:text-slate-400 text-base">Choose how you want to clean up your drive or folder.</p>
                 </div>
-                
-                <div class="grid gap-3 mb-8">
-                    <div class="flex items-start gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-700/30 border border-slate-100 dark:border-slate-700 shadow-sm transition hover:shadow-md">
-                        <span class="flex items-center justify-center w-8 h-8 rounded-full bg-indigo-600 text-white font-bold text-sm shrink-0 shadow-md">1</span>
-                        <p class="text-slate-700 dark:text-slate-300 mt-1">Select your messy <strong>Source Folder</strong>.</p>
+
+                <!-- Two Primary Workflow Options -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+                    <!-- Option 1: Organize Drive -->
+                    <div class="flex flex-col justify-between p-5 rounded-2xl bg-slate-50 dark:bg-slate-700/30 border border-slate-200 dark:border-slate-700 shadow-sm hover:border-indigo-300 dark:hover:border-indigo-700 transition">
+                        <div>
+                            <div class="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 text-xs font-bold mb-3">
+                                <i data-lucide="sparkles" class="pointer-events-none w-3.5 h-3.5"></i> Organize &amp; Transfer
+                            </div>
+                            <h2 class="text-lg font-bold text-slate-900 dark:text-white mb-1.5">Sort Messy Folders</h2>
+                            <p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed mb-3">
+                                Copy and sort files from a messy source into a clean destination folder by category &amp; date while skipping duplicates.
+                            </p>
+                            <ol class="text-xs text-slate-500 dark:text-slate-400 space-y-1 mb-4 list-decimal list-inside">
+                                <li>Select messy <strong>Source Folder(s)</strong></li>
+                                <li>Select <strong>Destination Folder</strong></li>
+                                <li>Preview &amp; organize safely</li>
+                            </ol>
+                        </div>
+                        <button type="button" class="w-full flex justify-center items-center gap-2 py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-md transition-all focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 active:scale-[0.98]" onclick="try { showView('setup-view'); } catch(e) { alert('Error: ' + e.message); }">
+                            Get Started <i data-lucide="arrow-right" class="pointer-events-none w-4 h-4"></i>
+                        </button>
                     </div>
-                    <div class="flex items-start gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-700/30 border border-slate-100 dark:border-slate-700 shadow-sm transition hover:shadow-md">
-                        <span class="flex items-center justify-center w-8 h-8 rounded-full bg-indigo-600 text-white font-bold text-sm shrink-0 shadow-md">2</span>
-                        <p class="text-slate-700 dark:text-slate-300 mt-1">Select your <strong>Destination Folder</strong>.</p>
+
+                    <!-- Option 2: Scan Duplicates In-Place -->
+                    <div class="flex flex-col justify-between p-5 rounded-2xl bg-amber-50/50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/60 shadow-sm hover:border-amber-400 dark:hover:border-amber-600 transition">
+                        <div>
+                            <div class="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 text-xs font-bold mb-3">
+                                <i data-lucide="copy" class="pointer-events-none w-3.5 h-3.5"></i> In-Place Cleaner
+                            </div>
+                            <h2 class="text-lg font-bold text-slate-900 dark:text-white mb-1.5">Scan for Duplicates</h2>
+                            <p class="text-xs text-slate-600 dark:text-slate-300 leading-relaxed mb-3">
+                                Scan any folder or full drive in-place to find exact byte-for-byte duplicates and reclaim wasted space—no second drive needed.
+                            </p>
+                            <ol class="text-xs text-slate-500 dark:text-slate-400 space-y-1 mb-4 list-decimal list-inside">
+                                <li>Pick any <strong>Folder or Drive</strong></li>
+                                <li>Review duplicate groups</li>
+                                <li>Quarantine or delete redundant copies</li>
+                            </ol>
+                        </div>
+                        <button type="button" class="w-full flex justify-center items-center gap-2 py-3 px-4 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-xl shadow-md transition-all focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 active:scale-[0.98]" onclick="try { showView('duplicates-view'); } catch(e) { alert('Error: ' + e.message); }">
+                            <i data-lucide="search" class="pointer-events-none w-4 h-4"></i> Scan Duplicates
+                        </button>
                     </div>
-                    <div class="flex items-start gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-700/30 border border-slate-100 dark:border-slate-700 shadow-sm transition hover:shadow-md">
-                        <span class="flex items-center justify-center w-8 h-8 rounded-full bg-indigo-600 text-white font-bold text-sm shrink-0 shadow-md">3</span>
-                        <p class="text-slate-700 dark:text-slate-300 mt-1">Click Organize and let the magic happen!</p>
-                    </div>
                 </div>
-                
-                <div class="flex items-start gap-3 p-4 mb-8 text-sm text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200/50 dark:border-amber-800/50">
-                    <i data-lucide="info" class="pointer-events-none w-5 h-5 shrink-0 mt-0.5 opacity-80"></i>
-                    <p><strong>Note:</strong> Designed specifically for macOS. Utilizing APFS clonefile for zero-space copies and native Finder tags.</p>
+
+                <div class="flex items-start gap-3 p-3.5 mb-4 text-xs text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200/50 dark:border-amber-800/50">
+                    <i data-lucide="info" class="pointer-events-none w-4 h-4 shrink-0 mt-0.5 opacity-80"></i>
+                    <p><strong>macOS Native:</strong> Uses APFS <code>clonefile</code> for zero-space copies, native Finder tags, and 100% original-preserving duplicate removal.</p>
                 </div>
-                
-                <div class="flex flex-col gap-3">
-                    <button type="button" class="w-full flex justify-center items-center gap-2 py-3.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-md transition-all focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 active:scale-[0.98]" onclick="try { showView('setup-view'); } catch(e) { alert('Error: ' + e.message); }">
-                        Get Started <i data-lucide="arrow-right" class="pointer-events-none w-4 h-4"></i>
-                    </button>
-                    <button type="button" class="w-full flex justify-center items-center gap-2 py-3.5 px-4 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium rounded-xl border border-slate-200 dark:border-slate-600 shadow-sm transition-all active:scale-[0.98]" onclick="loadHistoryView()">
-                        <i data-lucide="history" class="pointer-events-none w-4 h-4"></i> View Past Runs & Audit Reports
-                    </button>
-                    <button type="button" class="w-full flex justify-center items-center gap-2 py-3.5 px-4 bg-amber-50 dark:bg-amber-900/30 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-400 font-medium rounded-xl border border-amber-200 dark:border-amber-800 shadow-sm transition-all active:scale-[0.98]" onclick="try { showView('duplicates-view'); } catch(e) { alert('Error: ' + e.message); }">
-                        <i data-lucide="copy" class="pointer-events-none w-4 h-4"></i> Standalone Duplicates Utility
-                    </button>
-                </div>
+
+                <button type="button" class="w-full flex justify-center items-center gap-2 py-3 px-4 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium rounded-xl border border-slate-200 dark:border-slate-600 shadow-sm transition-all active:scale-[0.98]" onclick="loadHistoryView()">
+                    <i data-lucide="history" class="pointer-events-none w-4 h-4"></i> View Past Runs &amp; Audit Reports
+                </button>
             </div>
 
             <!-- DUPLICATES VIEW -->

@@ -50,6 +50,7 @@ class UIState:
 state = UIState()
 state_lock = threading.Lock()
 active_api_instance = None
+active_dup_api_instance = None
 active_dup_scanner_cancelled = False
 
 
@@ -95,6 +96,22 @@ def _sanitize_csv_cell(value):
 def _json_dict() -> dict:
     data = request.get_json(silent=True)
     return data if isinstance(data, dict) else {}
+
+
+def _as_bool(val, default: bool = False) -> bool:
+    """Safely parse boolean JSON fields without coercing strings like 'false' or '0' to True."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("true", "1", "yes"):
+            return True
+        if v in ("false", "0", "no", ""):
+            return False
+        return default
+    if isinstance(val, int):
+        return bool(val)
+    return default
 
 
 @app.before_request
@@ -144,7 +161,7 @@ def start():
     data = _json_dict()
     source = data.get("source")
     dest = data.get("dest")
-    is_preview = bool(data.get("is_preview", False))
+    is_preview = _as_bool(data.get("is_preview", False))
     dest_mode = data.get("dest_mode", "new")
     excluded_projects = data.get("excluded_projects", [])
 
@@ -239,11 +256,14 @@ def get_status():
 @app.route("/api/projects", methods=["GET"])
 def get_projects():
     dest = request.args.get("dest")
-    if not dest or not os.path.exists(dest):
+    if not isinstance(dest, str) or not dest.strip():
+        return jsonify({"projects": []})
+    dest_abs = os.path.abspath(os.path.expanduser(dest.strip()))
+    if not os.path.exists(dest_abs):
         return jsonify({"projects": []})
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
-    projects = api.list_code_projects(dest)
+    projects = api.list_code_projects(dest_abs)
     return jsonify({"projects": projects})
 
 
@@ -257,29 +277,34 @@ def dissolve_project():
     project_path = data.get("project_path")
     if not isinstance(dest, str) or not dest.strip() or not isinstance(project_path, str) or not project_path.strip():
         return jsonify({"success": False, "error": "dest and project_path required"}), 400
+    dest_abs = os.path.abspath(os.path.expanduser(dest.strip()))
+    proj_abs = os.path.abspath(os.path.expanduser(project_path.strip()))
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
-    ok, msg = api.dissolve_and_resort_project(dest, project_path)
+    ok, msg = api.dissolve_and_resort_project(dest_abs, proj_abs)
     return jsonify({"success": ok, "message": msg, "error": None if ok else msg})
 
 
 @app.route("/api/duplicates", methods=["GET"])
 def get_duplicates():
     dest = request.args.get("dest")
-    if not dest or not os.path.exists(dest):
+    if not isinstance(dest, str) or not dest.strip():
+        return jsonify({"duplicates": [], "trashed": []})
+    dest_abs = os.path.abspath(os.path.expanduser(dest.strip()))
+    if not os.path.exists(dest_abs):
         return jsonify({"duplicates": [], "trashed": []})
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
-    dups = api.get_duplicate_records(dest)
-    trashed = api.get_trashed_duplicates(dest)
+    dups = api.get_duplicate_records(dest_abs)
+    trashed = api.get_trashed_duplicates(dest_abs)
     return jsonify({"duplicates": dups, "trashed": trashed})
 
 
 @app.route("/api/trash_duplicates", methods=["POST"])
 def trash_duplicates():
     with state_lock:
-        if state.status in ("running", "cancelling"):
-            return jsonify({"success": False, "error": "Cannot trash duplicates while a transfer is running.", "count": 0, "refused": []}), 409
+        if state.status in ("running", "cancelling") or state.dup_status in ("running", "cancelling"):
+            return jsonify({"success": False, "error": "Cannot trash duplicates while a transfer or duplicate scan is running.", "count": 0, "refused": []}), 409
     data = _json_dict()
     source_paths = data.get("source_paths", [])
     # dest is required for the safety re-check: it locates the checkpoint DB
@@ -290,7 +315,8 @@ def trash_duplicates():
     source_paths = [p for p in source_paths if isinstance(p, str) and p.strip()]
     if not source_paths:
         return jsonify({"success": False, "error": "No duplicate source paths were provided.", "count": 0, "refused": []})
-    if not isinstance(dest, str) or not dest.strip() or not os.path.exists(os.path.join(dest, ".organizer_checkpoint.db")):
+    dest_abs = os.path.abspath(os.path.expanduser(dest.strip())) if isinstance(dest, str) and dest.strip() else ""
+    if not dest_abs or not os.path.exists(os.path.join(dest_abs, ".organizer_checkpoint.db")):
         return jsonify({
             "success": False,
             "error": "Destination folder with checkpoint database is required to verify duplicates safely.",
@@ -299,15 +325,15 @@ def trash_duplicates():
         }), 400
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
-    count, refused = api.trash_duplicates(source_paths, dest_abs=dest)
+    count, refused = api.trash_duplicates(source_paths, dest_abs=dest_abs)
     return jsonify({"success": True, "count": count, "refused": refused})
 
 
 @app.route("/api/restore_duplicates", methods=["POST"])
 def restore_duplicates():
     with state_lock:
-        if state.status in ("running", "cancelling"):
-            return jsonify({"success": False, "error": "Cannot restore duplicates while a transfer is running.", "count": 0, "refused": []}), 409
+        if state.status in ("running", "cancelling") or state.dup_status in ("running", "cancelling"):
+            return jsonify({"success": False, "error": "Cannot restore duplicates while a transfer or duplicate scan is running.", "count": 0, "refused": []}), 409
     data = _json_dict()
     dest = data.get("dest", "")
     source_paths = data.get("source_paths")
@@ -315,7 +341,8 @@ def restore_duplicates():
         source_paths = [p for p in source_paths if isinstance(p, str) and p.strip()]
     else:
         source_paths = None
-    if not isinstance(dest, str) or not dest.strip() or not os.path.exists(os.path.join(dest, ".organizer_checkpoint.db")):
+    dest_abs = os.path.abspath(os.path.expanduser(dest.strip())) if isinstance(dest, str) and dest.strip() else ""
+    if not dest_abs or not os.path.exists(os.path.join(dest_abs, ".organizer_checkpoint.db")):
         return jsonify({
             "success": False,
             "error": "Destination folder with checkpoint database is required to restore trashed duplicates.",
@@ -324,7 +351,7 @@ def restore_duplicates():
         }), 400
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
-    count, refused = api.restore_duplicates(dest, source_paths=source_paths)
+    count, refused = api.restore_duplicates(dest_abs, source_paths=source_paths)
     return jsonify({"success": True, "count": count, "refused": refused})
 
 
@@ -379,9 +406,10 @@ def open_finder():
 @app.route("/api/export_csv", methods=["GET"])
 def export_csv():
     dest = request.args.get("dest")
-    if not dest:
+    if not isinstance(dest, str) or not dest.strip():
         return "Destination path required", 400
-    db_path = os.path.join(dest, ".organizer_checkpoint.db")
+    dest_abs = os.path.abspath(os.path.expanduser(dest.strip()))
+    db_path = os.path.join(dest_abs, ".organizer_checkpoint.db")
     if not os.path.exists(db_path):
         return "No checkpoint database found", 404
     import sqlite3
@@ -436,11 +464,14 @@ def export_csv():
 @app.route("/api/verify_transfer", methods=["GET"])
 def verify_transfer():
     dest = request.args.get("dest")
-    if not dest or not os.path.exists(dest):
+    if not isinstance(dest, str) or not dest.strip():
+        return jsonify({"success": False, "error": "Destination path required"})
+    dest_abs = os.path.abspath(os.path.expanduser(dest.strip()))
+    if not os.path.exists(dest_abs):
         return jsonify({"success": False, "error": "Destination path required"})
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
-    res = api.verify_transfer(dest)
+    res = api.verify_transfer(dest_abs)
     return jsonify(res)
 
 
@@ -451,11 +482,14 @@ def repair_transfer():
             return jsonify({"success": False, "error": "Cannot repair while a transfer is running."}), 409
     data = _json_dict()
     dest = data.get("dest")
-    if not isinstance(dest, str) or not dest.strip() or not os.path.isdir(dest):
+    if not isinstance(dest, str) or not dest.strip():
+        return jsonify({"success": False, "error": "Destination path required"})
+    dest_abs = os.path.abspath(os.path.expanduser(dest.strip()))
+    if not os.path.isdir(dest_abs):
         return jsonify({"success": False, "error": "Destination path required"})
     config_path = os.path.join(base_dir, "config.json")
     api = OrganizerAPI(config_path, log_cb, progress_cb)
-    res = api.repair_transfer(dest)
+    res = api.repair_transfer(dest_abs)
     return jsonify(res)
 
 
@@ -555,6 +589,7 @@ def dup_scan_start():
         active_dup_scanner_cancelled = False
 
     def run_dup_scan():
+        global active_dup_api_instance
         config_path = os.path.join(base_dir, "config.json")
         
         def dup_log_cb(msg):
@@ -569,8 +604,11 @@ def dup_scan_start():
                 state.dup_message = msg
 
         api = OrganizerAPI(config_path, dup_log_cb, dup_prog_cb)
+        with state_lock:
+            active_dup_api_instance = api
+            if active_dup_scanner_cancelled or state.dup_scan_id != scan_id:
+                api.cancelled = True
         
-        # We need to hack cancelled flag because it's set by cancel() in api_organizer
         def check_cancel():
             if active_dup_scanner_cancelled or state.dup_scan_id != scan_id:
                 api.cancelled = True
@@ -594,7 +632,7 @@ def dup_scan_start():
             with state_lock:
                 if state.dup_scan_id != scan_id:
                     pass  # superseded by a newer scan: publish nothing
-                elif active_dup_scanner_cancelled:
+                elif active_dup_scanner_cancelled or api.cancelled:
                     state.dup_status = "cancelled"
                 else:
                     state.dup_results = groups
@@ -606,6 +644,10 @@ def dup_scan_start():
                     state.dup_status = "error"
                     state.dup_message = str(e)
             print(f"Dup scan error: {e}")
+        finally:
+            with state_lock:
+                if active_dup_api_instance is api:
+                    active_dup_api_instance = None
 
     thread = threading.Thread(target=run_dup_scan)
     thread.daemon = True
@@ -666,18 +708,11 @@ def dup_reveal():
 
 @app.route("/api/dup_trash_inplace", methods=["POST"])
 def dup_trash_inplace():
-    with state_lock:
-        if state.dup_status in ("running", "cancelling"):
-            return jsonify({"success": False, "error": "Cannot remove duplicates while scan is running.", "count": 0, "refused": []}), 409
-        groups_snapshot = list(state.dup_results or [])
-        scan_root = state.dup_root
-        scan_id = state.dup_scan_id
-
     data = _json_dict()
     raw_source_paths = data.get("source_paths", [])
     raw_root_folder = data.get("root_folder", "")
-    permanent_delete = bool(data.get("permanent_delete", False))
-    delete_all_redundant = bool(data.get("delete_all_redundant", False))
+    permanent_delete = _as_bool(data.get("permanent_delete", False))
+    delete_all_redundant = _as_bool(data.get("delete_all_redundant", False))
 
     root_folder = raw_root_folder.strip() if isinstance(raw_root_folder, str) else ""
     if isinstance(raw_source_paths, list):
@@ -685,47 +720,56 @@ def dup_trash_inplace():
     else:
         source_paths = []
 
-    if delete_all_redundant and groups_snapshot:
-        source_paths = [
-            f for g in groups_snapshot for f in g.get("files", [])[1:]
-        ]
+    with OrganizerAPI._dup_removal_lock:
+        with state_lock:
+            if state.status in ("running", "cancelling") or state.dup_status in ("running", "cancelling"):
+                return jsonify({"success": False, "error": "Cannot remove duplicates while an operation or scan is running.", "count": 0, "refused": []}), 409
+            groups_snapshot = list(state.dup_results or [])
+            scan_root = state.dup_root
+            scan_id = state.dup_scan_id
 
-    if not source_paths or not root_folder:
-        return jsonify({"success": False, "error": "source_paths and root_folder required.", "count": 0, "refused": []}), 400
+        if delete_all_redundant and groups_snapshot:
+            source_paths = [
+                f for g in groups_snapshot for f in g.get("files", [])[1:]
+            ]
 
-    # root_folder comes from the UI's editable path field. It used to be
-    # trusted as-is, so results from one folder could be quarantined into
-    # another folder's .Duplicates_Trash, even on another drive (audit P2-06).
-    if not scan_root or _norm_folder(root_folder) != scan_root:
-        return jsonify({
-            "success": False,
-            "error": f"The duplicate results are for {scan_root or 'no folder yet'}. "
-                     f"Scan {root_folder} before removing anything from it.",
-            "count": 0,
-            "refused": [],
-        }), 409
+        if not source_paths or not root_folder:
+            return jsonify({"success": False, "error": "source_paths and root_folder required.", "count": 0, "refused": []}), 400
 
-    config_path = os.path.join(base_dir, "config.json")
-    api = OrganizerAPI(config_path, log_cb, progress_cb)
-    count, refused, bytes_reclaimed = api.trash_inplace_duplicates(
-        source_paths,
-        root_folder,
-        permanent_delete=permanent_delete,
-        groups=groups_snapshot,
-    )
+        # root_folder comes from the UI's editable path field. It used to be
+        # trusted as-is, so results from one folder could be quarantined into
+        # another folder's .Duplicates_Trash, even on another drive (audit P2-06).
+        if not scan_root or _norm_folder(root_folder) != scan_root:
+            return jsonify({
+                "success": False,
+                "error": f"The duplicate results are for {scan_root or 'no folder yet'}. "
+                         f"Scan {root_folder} before removing anything from it.",
+                "count": 0,
+                "refused": [],
+            }), 409
 
-    # Prune removed files from state.dup_results so the UI can immediately
-    # display the updated remaining groups without re-scanning the 2TB drive.
-    remaining_groups = []
-    for g in groups_snapshot:
-        surviving = [f for f in g.get("files", []) if f and os.path.exists(f)]
-        if len(surviving) > 1:
-            remaining_groups.append({"size": g.get("size", 0), "files": surviving})
+        root_expanded = os.path.abspath(os.path.expanduser(root_folder))
+        config_path = os.path.join(base_dir, "config.json")
+        api = OrganizerAPI(config_path, log_cb, progress_cb)
+        count, refused, bytes_reclaimed = api.trash_inplace_duplicates(
+            source_paths,
+            root_expanded,
+            permanent_delete=permanent_delete,
+            groups=groups_snapshot,
+        )
 
-    with state_lock:
-        # A scan started meanwhile owns dup_results now.
-        if state.dup_scan_id == scan_id:
-            state.dup_results = remaining_groups
+        # Prune removed files from state.dup_results so the UI can immediately
+        # display the updated remaining groups without re-scanning the 2TB drive.
+        remaining_groups = []
+        for g in groups_snapshot:
+            surviving = [f for f in g.get("files", []) if f and os.path.exists(os.path.expanduser(f))]
+            if len(surviving) > 1:
+                remaining_groups.append({"size": g.get("size", 0), "files": surviving})
+
+        with state_lock:
+            # A scan started meanwhile owns dup_results now.
+            if state.dup_scan_id == scan_id:
+                state.dup_results = remaining_groups
 
     return jsonify({
         "success": True,
@@ -768,6 +812,8 @@ def dup_scan_cancel():
     with state_lock:
         if state.dup_status in ("running", "cancelling"):
             active_dup_scanner_cancelled = True
+            if active_dup_api_instance is not None:
+                active_dup_api_instance.cancel()
             if state.dup_status == "running":
                 state.dup_status = "cancelling"
         current_status = state.dup_status
@@ -845,7 +891,7 @@ def start_ui():
 
     try:
         import webview
-        webview.create_window('Drive Organizer', url, width=700, height=550)
+        webview.create_window('Drive Organizer', url, width=860, height=680)
         webview.start()
     except ImportError:
         import webbrowser

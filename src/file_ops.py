@@ -52,7 +52,12 @@ def _clear_immutable(path: str):
         flags = getattr(st, "st_flags", 0)
         uf_immutable = getattr(stat, "UF_IMMUTABLE", 0x00000002)
         if flags & uf_immutable:
-            os.chflags(path, flags & ~uf_immutable)
+            if stat.S_ISLNK(st.st_mode):
+                lchflags = getattr(os, "lchflags", None)
+                if lchflags is not None:
+                    lchflags(path, flags & ~uf_immutable)
+            else:
+                os.chflags(path, flags & ~uf_immutable)
     except (OSError, AttributeError):
         pass
 
@@ -289,7 +294,7 @@ def safe_copy(source_path: str, target_path: str):
     return target_path
 
 
-def files_are_identical(path_a: str, path_b: str) -> bool:
+def files_are_identical(path_a: str, path_b: str, cancel_check=None) -> bool:
     """Byte-for-byte comparison of two files without using filecmp's global stat cache.
 
     The part-hash below only samples the first and last 1MB of a file, so it
@@ -309,9 +314,11 @@ def files_are_identical(path_a: str, path_b: str) -> bool:
             return False
         if size_a == 0:
             return True
-        bufsize = 65536
+        bufsize = 1024 * 1024
         with open(path_a, 'rb') as fa, open(path_b, 'rb') as fb:
             while True:
+                if cancel_check is not None and cancel_check():
+                    return False
                 ba = fa.read(bufsize)
                 bb = fb.read(bufsize)
                 if ba != bb:
